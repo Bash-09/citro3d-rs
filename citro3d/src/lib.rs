@@ -133,25 +133,20 @@ impl Instance {
             Err(Error::InvalidRenderTarget)
         }
     }
+    pub fn begin_new_frame(&mut self) -> Frame<'_> {
+        Frame::new(self)
+    }
 
     /// Render a frame. The passed in function/closure can mutate the instance,
     /// such as to [select a render target](Self::select_render_target)
     /// or [bind a new shader program](Self::bind_program).
     #[doc(alias = "C3D_FrameBegin")]
     #[doc(alias = "C3D_FrameEnd")]
-    pub fn render_frame_with(&mut self, f: impl FnOnce(&mut Self)) {
-        unsafe {
-            citro3d_sys::C3D_FrameBegin(
-                // TODO: begin + end flags should be configurable
-                citro3d_sys::C3D_FRAME_SYNCDRAW,
-            );
-        }
-
-        f(self);
-
-        unsafe {
-            citro3d_sys::C3D_FrameEnd(0);
-        }
+    pub fn render_frame_with<'s>(&'s mut self, f: impl FnOnce(&mut Frame<'s>)) {
+        let mut guard = self.begin_new_frame();
+        f(&mut guard);
+        // not strictly needed but explicit for readability
+        drop(guard);
     }
 
     /// Get the buffer info being used, if it exists. Note that the resulting
@@ -203,12 +198,14 @@ impl Instance {
     }
 
     /// Use the given [`shader::Program`] for subsequent draw calls.
-    pub fn bind_program(&mut self, program: &shader::Program) {
-        // SAFETY: AFAICT C3D_BindProgram just copies pointers from the given program,
-        // instead of mutating the pointee in any way that would cause UB
-        unsafe {
-            citro3d_sys::C3D_BindProgram(program.as_raw().cast_mut());
-        }
+    ///
+    /// # Safety
+    /// - `program` must live at least as long as `self` or UB
+    /// - The memory location pointed to by the reference must not change after this call or UB (i.e. `program` must be pinned)
+    pub unsafe fn bind_program(&mut self, program: &shader::Program) {
+        // This will copy the pointer to the internal context, which will result in
+        // accessing undefined memory if it moves (e.g. because it went out of scope)
+        citro3d_sys::C3D_BindProgram(program.as_raw().cast_mut());
     }
 
     /// Bind a uniform to the given `index` in the vertex shader for the next draw call.
@@ -298,6 +295,34 @@ impl Drop for RenderQueue {
     fn drop(&mut self) {
         unsafe {
             citro3d_sys::C3D_Fini();
+        }
+    }
+}
+
+pub struct Frame<'g>(&'g mut Instance);
+
+impl<'g> Frame<'g> {
+    fn new(inst: &'g mut Instance) -> Self {
+        unsafe {
+            citro3d_sys::C3D_FrameBegin(
+                // TODO: begin + end flags should be configurable
+                citro3d_sys::C3D_FRAME_SYNCDRAW.try_into().unwrap(),
+            );
+        }
+        Self(inst)
+    }
+    /// Use the given [`shader::Program`] for subsequent draw calls.
+    pub fn bind_program(&mut self, program: &'g shader::Program) {
+        // Safety: The lifetime guarantees that it must live long enough and also pins it for the duration
+        unsafe {
+            self.0.bind_program(program);
+        }
+    }
+}
+impl<'g> Drop for Frame<'g> {
+    fn drop(&mut self) {
+        unsafe {
+            citro3d_sys::C3D_FrameEnd(0);
         }
     }
 }
