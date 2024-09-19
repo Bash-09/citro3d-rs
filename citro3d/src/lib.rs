@@ -1,3 +1,4 @@
+#![feature(allocator_api)]
 #![feature(custom_test_frameworks)]
 #![test_runner(test_runner::run_gdb)]
 #![feature(doc_cfg)]
@@ -23,6 +24,7 @@ pub mod math;
 pub mod render;
 pub mod shader;
 pub mod texenv;
+pub mod texture;
 pub mod uniform;
 
 use std::cell::{OnceCell, RefMut};
@@ -264,6 +266,24 @@ impl Instance {
         // We have to do this weird unwrap to get a mutable reference,
         // since there is no `get_mut_or_init` or equivalent
         texenv.get_mut().unwrap()
+    }
+
+    /// Binds a texture to the given texture unit, returning the previously bound texture if there was one.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # let mut instance = citro3d::Instance::new().unwrap();
+    /// let params = texture::TextureParameters::new_2d(64, 64, texture::Format::RGB8);
+    /// let texture = texture::Texture::new(params).unwrap();
+    /// let _ = instance.bind_texture(texture, texture::TexUnit::TexUnit0);
+    /// ```
+    pub fn bind_texture<'t>(&mut self, texture: &'t texture::Texture, unit: texture::TexUnit) {
+        // SAFETY: A bound texture must be pinned, and cannot be unpinned until it is unbound, which only
+        // happens when a new texture is bound to the same `TexUnit`.
+        unsafe {
+            citro3d_sys::C3D_TexBind(unit as i32, &texture.tex as *const _ as *mut _);
+        }
     }
 }
 
