@@ -29,12 +29,13 @@ pub mod uniform;
 
 use std::cell::{OnceCell, RefMut};
 use std::fmt;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use ctru::services::gfx::Screen;
 pub use error::{Error, Result};
 
-use self::texenv::TexEnv;
+use self::texenv::TexEnvInner;
 use self::uniform::Uniform;
 
 pub mod macros {
@@ -47,7 +48,7 @@ pub mod macros {
 #[non_exhaustive]
 #[must_use]
 pub struct Instance {
-    texenvs: [OnceCell<TexEnv>; texenv::TEXENV_COUNT],
+    texenvs: [OnceCell<TexEnvInner>; texenv::TEXENV_COUNT],
     queue: Rc<RenderQueue>,
 }
 
@@ -124,8 +125,10 @@ impl Instance {
     ///
     /// Fails if the given target cannot be used for drawing, or called outside
     /// the context of a frame render.
+    ///
+    /// SAFETY: The target must live until it's no longer in use
     #[doc(alias = "C3D_FrameDrawOn")]
-    pub fn select_render_target(&mut self, target: &render::Target<'_>) -> Result<()> {
+    unsafe fn select_render_target(&mut self, target: &render::Target<'_>) -> Result<()> {
         let _ = self;
         if unsafe { citro3d_sys::C3D_FrameDrawOn(target.as_raw()) } {
             Ok(())
@@ -133,7 +136,8 @@ impl Instance {
             Err(Error::InvalidRenderTarget)
         }
     }
-    pub fn begin_new_frame(&mut self) -> Frame<'_> {
+
+    pub fn begin_new_frame(&mut self) -> Frame {
         Frame::new(self)
     }
 
@@ -142,7 +146,7 @@ impl Instance {
     /// or [bind a new shader program](Self::bind_program).
     #[doc(alias = "C3D_FrameBegin")]
     #[doc(alias = "C3D_FrameEnd")]
-    pub fn render_frame_with<'s>(&'s mut self, f: impl FnOnce(&mut Frame<'s>)) {
+    pub fn render_frame_with<'s>(&'s mut self, f: impl FnOnce(&mut Frame<'_, 's>)) {
         let mut guard = self.begin_new_frame();
         f(&mut guard);
         // not strictly needed but explicit for readability
@@ -159,7 +163,7 @@ impl Instance {
 
     /// Set the buffer info to use for any following draw calls.
     #[doc(alias = "C3D_SetBufInfo")]
-    pub fn set_buffer_info(&mut self, buffer_info: &buffer::Info) {
+    fn set_buffer_info(&mut self, buffer_info: &buffer::Info) {
         let raw: *const _ = &buffer_info.0;
         // SAFETY: C3D_SetBufInfo actually copies the pointee instead of mutating it.
         unsafe { citro3d_sys::C3D_SetBufInfo(raw.cast_mut()) };
@@ -175,7 +179,7 @@ impl Instance {
 
     /// Set the attribute info to use for any following draw calls.
     #[doc(alias = "C3D_SetAttrInfo")]
-    pub fn set_attr_info(&mut self, attr_info: &attrib::Info) {
+    fn set_attr_info(&mut self, attr_info: &attrib::Info) {
         let raw: *const _ = &attr_info.0;
         // SAFETY: C3D_SetAttrInfo actually copies the pointee instead of mutating it.
         unsafe { citro3d_sys::C3D_SetAttrInfo(raw.cast_mut()) };
@@ -183,7 +187,7 @@ impl Instance {
 
     /// Render primitives from the current vertex array buffer.
     #[doc(alias = "C3D_DrawArrays")]
-    pub fn draw_arrays(&mut self, primitive: buffer::Primitive, vbo_data: buffer::Slice) {
+    fn draw_arrays(&mut self, primitive: buffer::Primitive, vbo_data: buffer::Slice) {
         self.set_buffer_info(vbo_data.info());
 
         // TODO: should we also require the attrib info directly here?
@@ -200,9 +204,10 @@ impl Instance {
     /// Use the given [`shader::Program`] for subsequent draw calls.
     ///
     /// # Safety
-    /// - `program` must live at least as long as `self` or UB
+    /// - `program` must live as long as it's in use (until no more rendering occurs, or
+    /// another program is bound to replace it) or UB.
     /// - The memory location pointed to by the reference must not change after this call or UB (i.e. `program` must be pinned)
-    pub unsafe fn bind_program(&mut self, program: &shader::Program) {
+    unsafe fn bind_program(&mut self, program: &shader::Program) {
         // This will copy the pointer to the internal context, which will result in
         // accessing undefined memory if it moves (e.g. because it went out of scope)
         citro3d_sys::C3D_BindProgram(program.as_raw().cast_mut());
@@ -257,30 +262,12 @@ impl Instance {
     /// ```
     #[doc(alias = "C3D_GetTexEnv")]
     #[doc(alias = "C3D_TexEnvInit")]
-    pub fn texenv(&mut self, stage: texenv::Stage) -> &mut texenv::TexEnv {
+    fn texenv(&mut self, stage: texenv::Stage) -> &mut texenv::TexEnvInner {
         let texenv = &mut self.texenvs[stage.0];
-        texenv.get_or_init(|| TexEnv::new(stage));
+        texenv.get_or_init(|| TexEnvInner::new(stage));
         // We have to do this weird unwrap to get a mutable reference,
         // since there is no `get_mut_or_init` or equivalent
         texenv.get_mut().unwrap()
-    }
-
-    /// Binds a texture to the given texture unit, returning the previously bound texture if there was one.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # let mut instance = citro3d::Instance::new().unwrap();
-    /// let params = texture::TextureParameters::new_2d(64, 64, texture::Format::RGB8);
-    /// let texture = texture::Texture::new(params).unwrap();
-    /// let _ = instance.bind_texture(texture, texture::TexUnit::TexUnit0);
-    /// ```
-    pub fn bind_texture<'t>(&mut self, texture: &'t texture::Texture, unit: texture::TexUnit) {
-        // SAFETY: A bound texture must be pinned, and cannot be unpinned until it is unbound, which only
-        // happens when a new texture is bound to the same `TexUnit`.
-        unsafe {
-            citro3d_sys::C3D_TexBind(unit as i32, &texture.tex as *const _ as *mut _);
-        }
     }
 }
 
@@ -299,30 +286,122 @@ impl Drop for RenderQueue {
     }
 }
 
-pub struct Frame<'g>(&'g mut Instance);
+pub struct Frame<'i, 'r> {
+    instance: &'i mut Instance,
+    _render_pass_phantom: PhantomData<&'r ()>,
+}
 
-impl<'g> Frame<'g> {
-    fn new(inst: &'g mut Instance) -> Self {
+impl<'i, 'r> Frame<'i, 'r> {
+    fn new(inst: &'i mut Instance) -> Frame<'i, 'r> {
         unsafe {
             citro3d_sys::C3D_FrameBegin(
                 // TODO: begin + end flags should be configurable
                 citro3d_sys::C3D_FRAME_SYNCDRAW.try_into().unwrap(),
             );
         }
-        Self(inst)
-    }
-    /// Use the given [`shader::Program`] for subsequent draw calls.
-    pub fn bind_program(&mut self, program: &'g shader::Program) {
-        // Safety: The lifetime guarantees that it must live long enough and also pins it for the duration
-        unsafe {
-            self.0.bind_program(program);
+        Self {
+            instance: inst,
+            _render_pass_phantom: PhantomData,
         }
     }
+
+    #[doc(alias = "C3D_DrawArrays")]
+    #[doc(alias = "C3D_DrawElements")]
+    pub fn draw(&mut self, pass: RenderPass<'r, '_, '_, '_>) -> Result<()> {
+        let RenderPass {
+            program,
+            target,
+            vbo_data,
+            attribute_info,
+            texenv_stages,
+            params:
+                RenderParameters {
+                    primitive,
+                    indices,
+                    vertex_uniforms,
+                    geometry_uniforms,
+                },
+        } = pass;
+
+        if texenv_stages.is_empty() {
+            return Err(Error::InvalidSize);
+        }
+
+        unsafe {
+            self.instance.bind_program(program);
+            self.instance.select_render_target(target).unwrap();
+
+            // Uniforms
+            self.instance.set_attr_info(attribute_info);
+
+            for &(index, uniform) in vertex_uniforms.iter() {
+                self.instance.bind_vertex_uniform(index, uniform);
+            }
+
+            for &(index, uniform) in geometry_uniforms.iter() {
+                self.instance.bind_geometry_uniform(index, uniform);
+            }
+
+            // Texenvs
+            for i in 0..texenv::TEXENV_COUNT {
+                let texenv = self.instance.texenv(texenv::Stage::new(i).unwrap());
+                if let Some(stage) = texenv_stages.get(i) {
+                    stage.setup_texenv(texenv);
+                } else {
+                    texenv.reset();
+                }
+            }
+
+            // Draw arrays or elements
+            // vbo_data.info().set_buffer_info();
+            if let Some(_indices) = indices {
+                // TODO - Indexed rendering not yet implemented
+                return Result::Err(Error::Unsupported);
+            } else {
+                self.instance.draw_arrays(primitive, vbo_data);
+            }
+        }
+
+        // Ok(self)
+        Ok(())
+    }
 }
-impl<'g> Drop for Frame<'g> {
+impl Drop for Frame<'_, '_> {
     fn drop(&mut self) {
         unsafe {
             citro3d_sys::C3D_FrameEnd(0);
+        }
+    }
+}
+
+/// A RenderPass describes all the parameters for making a call to render a vbo.
+#[derive(Clone)]
+pub struct RenderPass<'k, 's, 't, 'a> {
+    pub program: &'k shader::Program,
+    pub target: &'k render::Target<'t>,
+    pub vbo_data: buffer::Slice<'s>,
+    pub attribute_info: &'k attrib::Info,
+    /// The [`texenv::TexEnv`] stages used to combine shader outputs and textures.
+    /// There must be at least 1 and at most 6 provided, any more than 6 will be ignored.
+    pub texenv_stages: &'a [texenv::TexEnv<'k>],
+    pub params: RenderParameters<'a>,
+}
+
+#[derive(Clone)]
+pub struct RenderParameters<'a> {
+    pub primitive: buffer::Primitive,
+    pub indices: Option<()>,
+    pub vertex_uniforms: &'a [(uniform::Index, Uniform)],
+    pub geometry_uniforms: &'a [(uniform::Index, Uniform)],
+}
+
+impl Default for RenderParameters<'_> {
+    fn default() -> Self {
+        Self {
+            primitive: buffer::Primitive::Triangles,
+            indices: None,
+            vertex_uniforms: &[],
+            geometry_uniforms: &[],
         }
     }
 }

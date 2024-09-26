@@ -36,6 +36,8 @@ pub enum Error {
     InvalidName,
     /// The requested resource could not be found.
     NotFound,
+    /// This functionality is not yet supported
+    Unsupported,
 }
 
 impl From<TryFromIntError> for Error {

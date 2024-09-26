@@ -171,7 +171,7 @@ impl Texture {
         // SAFETY: The `data` buffer has been verified to be long enough
         unsafe {
             citro3d_sys::C3D_TexLoadImage(
-                self.ptr(),
+                self.as_raw(),
                 data.as_ptr() as *const _,
                 face as u8,
                 mipmap_level as i32,
@@ -179,6 +179,13 @@ impl Texture {
         }
 
         Ok(())
+    }
+
+    /// Binds this texture to the given texture unit of the GPU.
+    ///
+    /// SAFETY: This texture must stay alive as long as it's bound to the GPU (and a texenv is using that TexUnit?)
+    pub(crate) unsafe fn bind(&self, unit: TexUnit) {
+        citro3d_sys::C3D_TexBind(unit as _, &self.tex as *const _ as *mut _);
     }
 
     /// Generate a mipmap for this texture, and this face if it's a cube texture.
@@ -190,24 +197,24 @@ impl Texture {
     }
 
     pub fn set_filter(&mut self, mag_filter: Filter, min_filter: Filter) {
-        unsafe { citro3d_sys::C3D_TexSetFilter(self.ptr(), mag_filter as u8, min_filter as u8) };
+        unsafe { citro3d_sys::C3D_TexSetFilter(self.as_raw(), mag_filter as u8, min_filter as u8) };
     }
 
     pub fn set_filter_mipmap(&mut self, filter: Filter) {
         unsafe {
-            citro3d_sys::C3D_TexSetFilterMipmap(self.ptr(), filter as u8);
+            citro3d_sys::C3D_TexSetFilterMipmap(self.as_raw(), filter as u8);
         }
     }
 
     pub fn set_wrap(&mut self, wrap_s: Wrap, wrap_t: Wrap) {
         unsafe {
-            citro3d_sys::C3D_TexSetWrap(self.ptr(), wrap_s as u8, wrap_t as u8);
+            citro3d_sys::C3D_TexSetWrap(self.as_raw(), wrap_s as u8, wrap_t as u8);
         }
     }
 
     pub fn set_lod_bias(&mut self, lod_bias: f32) {
         unsafe {
-            citro3d_sys::C3D_TexSetLodBias(self.ptr(), lod_bias);
+            citro3d_sys::C3D_TexSetLodBias(self.as_raw(), lod_bias);
         }
     }
 
@@ -239,7 +246,7 @@ impl Texture {
         unsafe { self.tex.__bindgen_anon_3.__bindgen_anon_1.minLevel }
     }
 
-    fn ptr(&self) -> *mut citro3d_sys::C3D_Tex {
+    fn as_raw(&self) -> *mut citro3d_sys::C3D_Tex {
         &self.tex as *const _ as *mut _
     }
 }
@@ -247,7 +254,7 @@ impl Texture {
 impl Drop for Texture {
     fn drop(&mut self) {
         // SAFETY: self.tex was initialised with C3D_TexInitWithParams
-        unsafe { citro3d_sys::C3D_TexDelete(self.ptr()) }
+        unsafe { citro3d_sys::C3D_TexDelete(self.as_raw()) }
     }
 }
 
