@@ -20,6 +20,7 @@ use crate::uniform;
 #[must_use]
 pub struct Program {
     program: ctru_sys::shaderProgram_s,
+    _shader: Library,
 }
 
 impl Program {
@@ -32,7 +33,11 @@ impl Program {
     /// * the input shader is not a vertex shader or is otherwise invalid
     #[doc(alias = "shaderProgramInit")]
     #[doc(alias = "shaderProgramSetVsh")]
-    pub fn new(vertex_shader: Entrypoint) -> Result<Self, ctru::Error> {
+    pub fn new(shader: Library, vertex_shader_index: usize) -> Result<Self, ctru::Error> {
+        let vertex_shader = shader
+            .get(vertex_shader_index)
+            .ok_or_else(|| ctru::Error::Other(String::from("Invalid index")))?;
+
         let mut program = unsafe {
             let mut program = MaybeUninit::uninit();
             let result = ctru_sys::shaderProgramInit(program.as_mut_ptr());
@@ -45,7 +50,10 @@ impl Program {
         let ret = unsafe { ctru_sys::shaderProgramSetVsh(&mut program, vertex_shader.as_raw()) };
 
         if ret == 0 {
-            Ok(Self { program })
+            Ok(Self {
+                program,
+                _shader: shader,
+            })
         } else {
             Err(ctru::Error::from(ret))
         }
