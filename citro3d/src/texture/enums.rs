@@ -67,14 +67,14 @@ impl Face {
 }
 
 /// Supported texture units.
-#[doc(alias = "GPU_TEXUNIT")]
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TexUnit {
-    TexUnit0 = ctru_sys::GPU_TEXUNIT0,
-    TexUnit1 = ctru_sys::GPU_TEXUNIT1,
-    TexUnit2 = ctru_sys::GPU_TEXUNIT2,
+    TexUnit0 = 0,
+    TexUnit1 = 1,
+    TexUnit2 = 2,
+    TexUnit3 = 3,
 }
 
 /// Supported texture formats.

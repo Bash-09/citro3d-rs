@@ -68,6 +68,7 @@ impl Sources<'_> {
                 Source::Texture0(t) => t.bind(texture::TexUnit::TexUnit0),
                 Source::Texture1(t) => t.bind(texture::TexUnit::TexUnit1),
                 Source::Texture2(t) => t.bind(texture::TexUnit::TexUnit2),
+                Source::Texture3(t) => t.bind(texture::TexUnit::TexUnit3),
                 _ => {}
             };
         };
@@ -90,6 +91,44 @@ impl Sources<'_> {
     }
 }
 
+/// Configure the operations on the texture combiner
+#[derive(Clone, Copy)]
+pub struct Ops {
+    pub rgb0: RGBOp,
+    pub rgb1: RGBOp,
+    pub rgb2: RGBOp,
+    pub alpha0: AlphaOp,
+    pub alpha1: AlphaOp,
+    pub alpha2: AlphaOp,
+}
+
+impl Default for Ops {
+    fn default() -> Self {
+        Ops {
+            rgb0: RGBOp::SrcColor,
+            rgb1: RGBOp::SrcColor,
+            rgb2: RGBOp::SrcColor,
+            alpha0: AlphaOp::SrcAlpha,
+            alpha1: AlphaOp::SrcAlpha,
+            alpha2: AlphaOp::SrcAlpha,
+        }
+    }
+}
+
+impl Ops {
+    fn set_ops(&self, env: &TexEnvInner) {
+        unsafe {
+            citro3d_sys::C3D_TexEnvOpRgb(env.0, self.rgb0 as _, self.rgb1 as _, self.rgb2 as _);
+            citro3d_sys::C3D_TexEnvOpAlpha(
+                env.0,
+                self.alpha0 as _,
+                self.alpha1 as _,
+                self.alpha2 as _,
+            );
+        }
+    }
+}
+
 /// A texture combiner, also called a "texture environment" (hence the struct name).
 /// See also [`texenv.h` documentation](https://oreo639.github.io/citro3d/texenv_8h.html).
 #[derive(Clone, Copy)]
@@ -97,12 +136,14 @@ impl Sources<'_> {
 pub struct TexEnv<'a> {
     pub func: Func,
     pub sources: Sources<'a>,
+    pub ops: Ops,
 }
 
 impl TexEnv<'_> {
     pub(crate) unsafe fn setup_texenv(&self, env: &mut TexEnvInner) {
         self.sources.set_and_bind_texture_sources(env);
         self.func.set_func(env);
+        self.ops.set_ops(env);
     }
 }
 
@@ -132,7 +173,6 @@ pub(crate) enum SourceInner {
     Texture0 = ctru_sys::GPU_TEXTURE0,
     Texture1 = ctru_sys::GPU_TEXTURE1,
     Texture2 = ctru_sys::GPU_TEXTURE2,
-    #[allow(dead_code)]
     Texture3 = ctru_sys::GPU_TEXTURE3,
     PreviousBuffer = ctru_sys::GPU_PREVIOUS_BUFFER,
     Constant = ctru_sys::GPU_CONSTANT,
@@ -149,8 +189,7 @@ pub enum Source<'a> {
     Texture0(&'a texture::Texture),
     Texture1(&'a texture::Texture),
     Texture2(&'a texture::Texture),
-    // There's no TexUnit::TexUnit3 ??
-    // Texture3(&'a texture::Texture),
+    Texture3(&'a texture::Texture),
     PreviousBuffer,
     Constant,
     Previous,
@@ -171,6 +210,7 @@ impl From<&Source<'_>> for SourceInner {
             Source::Texture0(_) => SourceInner::Texture0,
             Source::Texture1(_) => SourceInner::Texture1,
             Source::Texture2(_) => SourceInner::Texture2,
+            Source::Texture3(_) => SourceInner::Texture3,
             Source::PreviousBuffer => SourceInner::PreviousBuffer,
             Source::Constant => SourceInner::Constant,
             Source::Previous => SourceInner::Previous,
@@ -200,6 +240,42 @@ pub enum CombineFunc {
     Dot3Rgb = ctru_sys::GPU_DOT3_RGB,
     // Added in libcrtu 2.3.0:
     // Dot3Rgba = ctru_sys::GPU_DOT3_RGBA,
+}
+
+/// The RGB combiner operands.
+#[doc(alias = "GPU_TEVOP_RGB")]
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+#[non_exhaustive]
+pub enum RGBOp {
+    SrcColor = ctru_sys::GPU_TEVOP_RGB_SRC_COLOR,
+    OneMinusSrcColor = ctru_sys::GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,
+    SrcAlpha = ctru_sys::GPU_TEVOP_RGB_SRC_ALPHA,
+    OneMinusSrcAlpha = ctru_sys::GPU_TEVOP_RGB_ONE_MINUS_SRC_ALPHA,
+    SrcRed = ctru_sys::GPU_TEVOP_RGB_SRC_R,
+    OneMinusSrcRed = ctru_sys::GPU_TEVOP_RGB_ONE_MINUS_SRC_R,
+    SrcGreen = ctru_sys::GPU_TEVOP_RGB_SRC_G,
+    OneMinusSrcGreen = ctru_sys::GPU_TEVOP_RGB_ONE_MINUS_SRC_G,
+    SrcBlue = ctru_sys::GPU_TEVOP_RGB_SRC_B,
+    OneMinusSrcBlue = ctru_sys::GPU_TEVOP_RGB_ONE_MINUS_SRC_B,
+}
+
+/// The Alpha combiner operands.
+#[doc(alias = "GPU_TEVOP_RGB")]
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+#[non_exhaustive]
+pub enum AlphaOp {
+    SrcAlpha = ctru_sys::GPU_TEVOP_A_SRC_ALPHA,
+    OneMinusSrcAlpha = ctru_sys::GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA,
+    SrcRed = ctru_sys::GPU_TEVOP_A_SRC_R,
+    OneMinusSrcRed = ctru_sys::GPU_TEVOP_A_ONE_MINUS_SRC_R,
+    SrcGreen = ctru_sys::GPU_TEVOP_A_SRC_G,
+    OneMinusSrcGreen = ctru_sys::GPU_TEVOP_A_ONE_MINUS_SRC_G,
+    SrcBlue = ctru_sys::GPU_TEVOP_A_SRC_B,
+    OneMinusSrcBlue = ctru_sys::GPU_TEVOP_A_ONE_MINUS_SRC_B,
 }
 
 /// A texture combination stage identifier. This index doubles as the order

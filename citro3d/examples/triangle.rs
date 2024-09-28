@@ -105,6 +105,7 @@ fn main() {
             source1: None,
             source2: None,
         },
+        ops: Default::default(),
     };
 
     let projection_uniform_idx = program.get_uniform("projection").unwrap();

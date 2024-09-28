@@ -127,10 +127,15 @@ impl Texture {
                 return Err(crate::Error::FailedToInitialize);
             }
 
-            Ok(Texture {
+            let mut tex = Texture {
                 tex: c3d_tex.assume_init(),
                 format,
-            })
+            };
+
+            // Set a default filter, as it won't render properly without one
+            tex.set_filter(Filter::Linear, Filter::Nearest);
+
+            Ok(tex)
         }
     }
 
