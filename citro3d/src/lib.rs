@@ -35,12 +35,19 @@ use std::rc::Rc;
 use ctru::services::gfx::Screen;
 pub use error::{Error, Result};
 
+use self::buffer::{Index, Indices};
 use self::texenv::TexEnvInner;
 use self::uniform::Uniform;
 
 pub mod macros {
     //! Helper macros for working with shaders.
     pub use citro3d_macros::*;
+}
+
+mod private {
+    pub trait Sealed {}
+    impl Sealed for u8 {}
+    impl Sealed for u16 {}
 }
 
 /// The single instance for using `citro3d`. This is the base type that an application
@@ -191,7 +198,6 @@ impl Instance {
         self.set_buffer_info(vbo_data.info());
 
         // TODO: should we also require the attrib info directly here?
-
         unsafe {
             citro3d_sys::C3D_DrawArrays(
                 primitive as ctru_sys::GPU_Primitive_t,
@@ -199,6 +205,39 @@ impl Instance {
                 vbo_data.len(),
             );
         }
+    }
+
+    /// Indexed drawing
+    ///
+    /// Draws the vertices in `buf` indexed by `indices`. `indices` must be linearly allocated
+    ///
+    /// # Safety
+    // TODO: #41 might be able to solve this:
+    /// If `indices` goes out of scope before the current frame ends it will cause a
+    /// use-after-free (possibly by the GPU).
+    ///
+    /// # Panics
+    ///
+    /// If the given index buffer is too long to have its length converted to `i32`.
+    #[doc(alias = "C3D_DrawElements")]
+    unsafe fn draw_elements<I: Index>(
+        &mut self,
+        primitive: buffer::Primitive,
+        vbo_data: buffer::Slice,
+        indices: &Indices<I>,
+    ) {
+        self.set_buffer_info(vbo_data.info());
+
+        let indices = &indices.buffer;
+        let elements = indices.as_ptr().cast();
+
+        citro3d_sys::C3D_DrawElements(
+            primitive as ctru_sys::GPU_Primitive_t,
+            indices.len().try_into().unwrap(),
+            // flag bit for short or byte
+            I::TYPE,
+            elements,
+        );
     }
 
     /// Use the given [`shader::Program`] for subsequent draw calls.
@@ -307,7 +346,7 @@ impl<'i, 'r> Frame<'i, 'r> {
 
     #[doc(alias = "C3D_DrawArrays")]
     #[doc(alias = "C3D_DrawElements")]
-    pub fn draw(&mut self, pass: RenderPass<'r, '_, '_, '_>) -> Result<()> {
+    pub fn draw<I: Index>(&mut self, pass: RenderPass<'r, '_, '_, '_, I>) -> Result<()> {
         let RenderPass {
             program,
             target,
@@ -353,10 +392,8 @@ impl<'i, 'r> Frame<'i, 'r> {
             }
 
             // Draw arrays or elements
-            // vbo_data.info().set_buffer_info();
-            if let Some(_indices) = indices {
-                // TODO - Indexed rendering not yet implemented
-                return Result::Err(Error::Unsupported);
+            if let Some(indices) = indices {
+                self.instance.draw_elements(primitive, vbo_data, indices);
             } else {
                 self.instance.draw_arrays(primitive, vbo_data);
             }
@@ -376,26 +413,26 @@ impl Drop for Frame<'_, '_> {
 
 /// A RenderPass describes all the parameters for making a call to render a vbo.
 #[derive(Clone)]
-pub struct RenderPass<'k, 's, 't, 'a> {
+pub struct RenderPass<'k, 'buf, 'tgt, 'arr, I: Index> {
     pub program: &'k shader::Program,
-    pub target: &'k render::Target<'t>,
-    pub vbo_data: buffer::Slice<'s>,
+    pub target: &'k render::Target<'tgt>,
+    pub vbo_data: buffer::Slice<'buf>,
     pub attribute_info: &'k attrib::Info,
     /// The [`texenv::TexEnv`] stages used to combine shader outputs and textures.
     /// There must be at least 1 and at most 6 provided, any more than 6 will be ignored.
-    pub texenv_stages: &'a [texenv::TexEnv<'k>],
-    pub params: RenderParameters<'a>,
+    pub texenv_stages: &'arr [texenv::TexEnv<'k>],
+    pub params: RenderParameters<'arr, 'buf, I>,
 }
 
 #[derive(Clone)]
-pub struct RenderParameters<'a> {
+pub struct RenderParameters<'arr, 'buf, I: Index> {
     pub primitive: buffer::Primitive,
-    pub indices: Option<()>,
-    pub vertex_uniforms: &'a [(uniform::Index, Uniform)],
-    pub geometry_uniforms: &'a [(uniform::Index, Uniform)],
+    pub indices: Option<&'arr Indices<'buf, I>>,
+    pub vertex_uniforms: &'arr [(uniform::Index, Uniform)],
+    pub geometry_uniforms: &'arr [(uniform::Index, Uniform)],
 }
 
-impl Default for RenderParameters<'_> {
+impl<I: Index> Default for RenderParameters<'_, '_, I> {
     fn default() -> Self {
         Self {
             primitive: buffer::Primitive::Triangles,
