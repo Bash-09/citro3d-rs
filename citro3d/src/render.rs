@@ -4,29 +4,81 @@
 use std::cell::RefMut;
 use std::rc::Rc;
 
-use citro3d_sys::{
-    C3D_RenderTarget, C3D_RenderTargetCreate, C3D_RenderTargetDelete, C3D_DEPTHTYPE,
-};
+use citro3d_sys::{C3D_RenderTargetCreate, C3D_RenderTargetDelete, C3D_DEPTHTYPE};
 use ctru::services::gfx::Screen;
 use ctru::services::gspgpu::FramebufferFormat;
 use ctru_sys::{GPU_COLORBUF, GPU_DEPTHBUF};
 
-use crate::{Error, RenderQueue, Result};
+use crate::{texture, Error, RenderQueue, Result};
 
 mod transfer;
 
-/// A render target for `citro3d`. Frame data will be written to this target
-/// to be rendered on the GPU and displayed on the screen.
 #[doc(alias = "C3D_RenderTarget")]
-pub struct Target<'screen> {
+pub trait Target {
+    /// Return the underlying `citro3d` render target for this target.
+    fn as_raw(&self) -> *mut citro3d_sys::C3D_RenderTarget;
+
+    /// Clear the render target with the given 32-bit RGBA color and depth buffer value.
+    /// Use `flags` to specify whether color and/or depth should be overwritten.
+    #[doc(alias = "C3D_RenderTargetClear")]
+    fn clear(&mut self, flags: ClearFlags, rgba_color: u32, depth: u32) {
+        unsafe {
+            citro3d_sys::C3D_RenderTargetClear(self.as_raw(), flags.bits(), rgba_color, depth);
+        }
+    }
+}
+
+/// A render target for `citro3d`. Frame data will be written to this target
+/// to be rendered on the GPU and used as a source for further rendering.
+pub struct TextureTarget {
     raw: *mut citro3d_sys::C3D_RenderTarget,
-    // This is unused after construction, but ensures unique access to the
-    // screen this target writes to during rendering
-    _screen: RefMut<'screen, dyn Screen>,
+    texture: texture::Texture,
     _queue: Rc<RenderQueue>,
 }
 
-impl Drop for Target<'_> {
+impl TextureTarget {
+    pub(crate) fn new(
+        mut texture: texture::Texture,
+        face: texture::Face,
+        depth_format: Option<DepthFormat>,
+        queue: Rc<RenderQueue>,
+    ) -> Result<Self> {
+        let raw = unsafe {
+            citro3d_sys::C3D_RenderTargetCreateFromTex(
+                &mut texture.tex as *mut _,
+                face as _,
+                0,
+                depth_format.map_or(C3D_DEPTHTYPE { __i: -1 }, DepthFormat::as_raw),
+            )
+        };
+
+        if raw.is_null() {
+            return Err(Error::FailedToInitialize);
+        }
+
+        Ok(TextureTarget {
+            raw,
+            texture,
+            _queue: queue,
+        })
+    }
+
+    pub fn texture(&self) -> &texture::Texture {
+        &self.texture
+    }
+
+    pub fn texture_mut(&mut self) -> &mut texture::Texture {
+        &mut self.texture
+    }
+}
+
+impl Target for TextureTarget {
+    fn as_raw(&self) -> *mut citro3d_sys::C3D_RenderTarget {
+        self.raw
+    }
+}
+
+impl Drop for TextureTarget {
     #[doc(alias = "C3D_RenderTargetDelete")]
     fn drop(&mut self) {
         unsafe {
@@ -35,7 +87,26 @@ impl Drop for Target<'_> {
     }
 }
 
-impl<'screen> Target<'screen> {
+/// A render target for `citro3d`. Frame data will be written to this target
+/// to be rendered on the GPU and displayed on the screen.
+pub struct ScreenTarget<'screen> {
+    raw: *mut citro3d_sys::C3D_RenderTarget,
+    // This is unused after construction, but ensures unique access to the
+    // screen this target writes to during rendering
+    _screen: RefMut<'screen, dyn Screen>,
+    _queue: Rc<RenderQueue>,
+}
+
+impl Drop for ScreenTarget<'_> {
+    #[doc(alias = "C3D_RenderTargetDelete")]
+    fn drop(&mut self) {
+        unsafe {
+            C3D_RenderTargetDelete(self.raw);
+        }
+    }
+}
+
+impl<'screen> ScreenTarget<'screen> {
     /// Create a new render target with the given parameters. This takes a
     /// [`RenderQueue`] parameter to make sure this  [`Target`] doesn't outlive
     /// the render queue.
@@ -81,18 +152,10 @@ impl<'screen> Target<'screen> {
             _queue: queue,
         })
     }
+}
 
-    /// Clear the render target with the given 32-bit RGBA color and depth buffer value.
-    /// Use `flags` to specify whether color and/or depth should be overwritten.
-    #[doc(alias = "C3D_RenderTargetClear")]
-    pub fn clear(&mut self, flags: ClearFlags, rgba_color: u32, depth: u32) {
-        unsafe {
-            citro3d_sys::C3D_RenderTargetClear(self.raw, flags.bits(), rgba_color, depth);
-        }
-    }
-
-    /// Return the underlying `citro3d` render target for this target.
-    pub(crate) fn as_raw(&self) -> *mut C3D_RenderTarget {
+impl<'screen> Target for ScreenTarget<'screen> {
+    fn as_raw(&self) -> *mut citro3d_sys::C3D_RenderTarget {
         self.raw
     }
 }

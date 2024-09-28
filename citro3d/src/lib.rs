@@ -120,8 +120,23 @@ impl Instance {
         height: usize,
         screen: RefMut<'screen, dyn Screen>,
         depth_format: Option<render::DepthFormat>,
-    ) -> Result<render::Target<'screen>> {
-        render::Target::new(width, height, screen, depth_format, Rc::clone(&self.queue))
+    ) -> Result<render::ScreenTarget<'screen>> {
+        render::ScreenTarget::new(width, height, screen, depth_format, Rc::clone(&self.queue))
+    }
+
+    /// Create a new render target that renders to a texture with the specified size, color format,
+    /// and depth format.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the target could not be created with the given parameters.
+    pub fn render_target_texture(
+        &self,
+        texture: texture::Texture,
+        face: texture::Face,
+        depth_format: Option<render::DepthFormat>,
+    ) -> Result<render::TextureTarget> {
+        render::TextureTarget::new(texture, face, depth_format, Rc::clone(&self.queue))
     }
 
     /// Select the given render target for drawing the frame. This must be called
@@ -135,7 +150,7 @@ impl Instance {
     ///
     /// SAFETY: The target must live until it's no longer in use
     #[doc(alias = "C3D_FrameDrawOn")]
-    unsafe fn select_render_target(&mut self, target: &render::Target<'_>) -> Result<()> {
+    unsafe fn select_render_target<T: render::Target>(&mut self, target: &T) -> Result<()> {
         let _ = self;
         if unsafe { citro3d_sys::C3D_FrameDrawOn(target.as_raw()) } {
             Ok(())
@@ -346,7 +361,10 @@ impl<'i, 'r> Frame<'i, 'r> {
 
     #[doc(alias = "C3D_DrawArrays")]
     #[doc(alias = "C3D_DrawElements")]
-    pub fn draw<I: Index>(&mut self, pass: RenderPass<'r, '_, '_, '_, I>) -> Result<()> {
+    pub fn draw<I: Index, T: render::Target>(
+        &mut self,
+        pass: RenderPass<'r, '_, '_, T, I>,
+    ) -> Result<()> {
         let RenderPass {
             program,
             target,
@@ -413,9 +431,9 @@ impl Drop for Frame<'_, '_> {
 
 /// A RenderPass describes all the parameters for making a call to render a vbo.
 #[derive(Clone)]
-pub struct RenderPass<'k, 'buf, 'tgt, 'arr, I: Index> {
+pub struct RenderPass<'k, 'buf, 'arr, T: render::Target, I: Index> {
     pub program: &'k shader::Program,
-    pub target: &'k render::Target<'tgt>,
+    pub target: &'k T,
     pub vbo_data: buffer::Slice<'buf>,
     pub attribute_info: &'k attrib::Info,
     /// The [`texenv::TexEnv`] stages used to combine shader outputs and textures.
