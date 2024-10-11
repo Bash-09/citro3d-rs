@@ -1,5 +1,4 @@
 use core::mem::MaybeUninit;
-use std::borrow::Borrow;
 
 mod enums;
 use citro3d_sys::C3D_TexCalcMaxLevel;

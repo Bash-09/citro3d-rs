@@ -34,8 +34,9 @@ use std::rc::Rc;
 
 use ctru::services::gfx::Screen;
 pub use error::{Error, Result};
+use texenv::DEFAULT_TEXENV;
 
-use self::buffer::{Index, Indices};
+use self::buffer::Index;
 use self::texenv::TexEnvInner;
 use self::uniform::Uniform;
 
@@ -239,7 +240,7 @@ impl Instance {
         &mut self,
         primitive: buffer::Primitive,
         vbo_data: buffer::Slice,
-        indices: &Indices<I>,
+        indices: &buffer::Indices<I>,
     ) {
         self.set_buffer_info(vbo_data.info());
 
@@ -361,9 +362,9 @@ impl<'i, 'r> Frame<'i, 'r> {
 
     #[doc(alias = "C3D_DrawArrays")]
     #[doc(alias = "C3D_DrawElements")]
-    pub fn draw<I: Index, T: render::Target>(
+    pub fn draw<T: render::Target, I: buffer::Index>(
         &mut self,
-        pass: RenderPass<'r, '_, '_, T, I>,
+        pass: &RenderPass<'r, '_, T, I>,
     ) -> Result<()> {
         let RenderPass {
             program,
@@ -371,13 +372,10 @@ impl<'i, 'r> Frame<'i, 'r> {
             vbo_data,
             attribute_info,
             texenv_stages,
-            params:
-                RenderParameters {
-                    primitive,
-                    indices,
-                    vertex_uniforms,
-                    geometry_uniforms,
-                },
+            primitive,
+            indices,
+            vertex_uniforms,
+            geometry_uniforms,
         } = pass;
 
         if texenv_stages.is_empty() {
@@ -386,7 +384,7 @@ impl<'i, 'r> Frame<'i, 'r> {
 
         unsafe {
             self.instance.bind_program(program);
-            self.instance.select_render_target(target).unwrap();
+            self.instance.select_render_target(*target).unwrap();
 
             // Uniforms
             self.instance.set_attr_info(attribute_info);
@@ -402,18 +400,15 @@ impl<'i, 'r> Frame<'i, 'r> {
             // Texenvs
             for i in 0..texenv::TEXENV_COUNT {
                 let texenv = self.instance.texenv(texenv::Stage::new(i).unwrap());
-                if let Some(stage) = texenv_stages.get(i) {
-                    stage.setup_texenv(texenv);
-                } else {
-                    texenv.reset();
-                }
+                let stage = texenv_stages.get(i).unwrap_or(&DEFAULT_TEXENV);
+                stage.setup_texenv(texenv);
             }
 
             // Draw arrays or elements
             if let Some(indices) = indices {
-                self.instance.draw_elements(primitive, vbo_data, indices);
+                self.instance.draw_elements(*primitive, *vbo_data, indices);
             } else {
-                self.instance.draw_arrays(primitive, vbo_data);
+                self.instance.draw_arrays(*primitive, *vbo_data);
             }
         }
 
@@ -431,33 +426,129 @@ impl Drop for Frame<'_, '_> {
 
 /// A RenderPass describes all the parameters for making a call to render a vbo.
 #[derive(Clone)]
-pub struct RenderPass<'k, 'buf, 'arr, T: render::Target, I: Index> {
+pub struct RenderPass<'k, 'buf, T: render::Target, I: Index> {
     pub program: &'k shader::Program,
     pub target: &'k T,
     pub vbo_data: buffer::Slice<'buf>,
     pub attribute_info: &'k attrib::Info,
     /// The [`texenv::TexEnv`] stages used to combine shader outputs and textures.
     /// There must be at least 1 and at most 6 provided, any more than 6 will be ignored.
-    pub texenv_stages: &'arr [texenv::TexEnv<'k>],
-    pub params: RenderParameters<'arr, 'buf, I>,
-}
-
-#[derive(Clone)]
-pub struct RenderParameters<'arr, 'buf, I: Index> {
+    pub texenv_stages: Vec<texenv::TexEnv<'k>>,
     pub primitive: buffer::Primitive,
-    pub indices: Option<&'arr Indices<'buf, I>>,
-    pub vertex_uniforms: &'arr [(uniform::Index, Uniform)],
-    pub geometry_uniforms: &'arr [(uniform::Index, Uniform)],
+    pub indices: Option<&'k buffer::Indices<'buf, I>>,
+    pub vertex_uniforms: Vec<(uniform::Index, Uniform)>,
+    pub geometry_uniforms: Vec<(uniform::Index, Uniform)>,
 }
 
-impl<I: Index> Default for RenderParameters<'_, '_, I> {
-    fn default() -> Self {
-        Self {
+impl<'k, 'buf, T: render::Target> RenderPass<'k, 'buf, T, u8> {
+    pub fn new(
+        program: &'k shader::Program,
+        target: &'k T,
+        vbo_data: buffer::Slice<'buf>,
+        attribute_info: &'k attrib::Info,
+    ) -> RenderPass<'k, 'buf, T, u8> {
+        RenderPass {
+            program,
+            target,
+            vbo_data,
+            attribute_info,
+            texenv_stages: Vec::new(),
             primitive: buffer::Primitive::Triangles,
             indices: None,
-            vertex_uniforms: &[],
-            geometry_uniforms: &[],
+            vertex_uniforms: Vec::new(),
+            geometry_uniforms: Vec::new(),
         }
+    }
+}
+
+impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
+    pub fn no_indices(self) -> RenderPass<'k, 'buf, T, u8> {
+        RenderPass {
+            program: self.program,
+            target: self.target,
+            vbo_data: self.vbo_data,
+            attribute_info: self.attribute_info,
+            texenv_stages: self.texenv_stages,
+            primitive: self.primitive,
+            indices: None,
+            vertex_uniforms: self.vertex_uniforms,
+            geometry_uniforms: self.geometry_uniforms,
+        }
+    }
+
+    pub fn with_program(mut self, program: &'k shader::Program) -> RenderPass<'k, 'buf, T, I> {
+        self.program = program;
+        self
+    }
+
+    pub fn with_target<T2: render::Target>(self, target: &'k T2) -> RenderPass<'k, 'buf, T2, I> {
+        RenderPass {
+            program: self.program,
+            target,
+            vbo_data: self.vbo_data,
+            attribute_info: self.attribute_info,
+            texenv_stages: self.texenv_stages,
+            primitive: self.primitive,
+            indices: self.indices,
+            vertex_uniforms: self.vertex_uniforms,
+            geometry_uniforms: self.geometry_uniforms,
+        }
+    }
+
+    pub fn with_indices<I2: buffer::Index>(
+        self,
+        indices: &'k buffer::Indices<'buf, I2>,
+    ) -> RenderPass<'k, 'buf, T, I2> {
+        RenderPass {
+            program: self.program,
+            target: self.target,
+            vbo_data: self.vbo_data,
+            attribute_info: self.attribute_info,
+            texenv_stages: self.texenv_stages,
+            primitive: self.primitive,
+            indices: Some(indices),
+            vertex_uniforms: self.vertex_uniforms,
+            geometry_uniforms: self.geometry_uniforms,
+        }
+    }
+
+    pub fn with_vbo(
+        mut self,
+        vbo_data: buffer::Slice<'buf>,
+        attribute_info: &'k attrib::Info,
+    ) -> RenderPass<'k, 'buf, T, I> {
+        self.vbo_data = vbo_data;
+        self.attribute_info = attribute_info;
+        self
+    }
+
+    pub fn with_texenv_stages(
+        mut self,
+        texenvs: impl IntoIterator<Item = texenv::TexEnv<'k>>,
+    ) -> RenderPass<'k, 'buf, T, I> {
+        self.texenv_stages = texenvs.into_iter().collect();
+        self
+    }
+
+    pub fn with_primitive(mut self, primitive: buffer::Primitive) -> RenderPass<'k, 'buf, T, I> {
+        self.primitive = primitive;
+        self
+    }
+
+    pub fn with_vertex_uniforms(
+        mut self,
+        uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
+    ) -> RenderPass<'k, 'buf, T, I> {
+        self.vertex_uniforms = uniforms.into_iter().collect();
+        self
+    }
+
+    pub fn with_geometry_uniforms(
+        mut self,
+        uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
+    ) -> RenderPass<'k, 'buf, T, I> {
+        self.geometry_uniforms = uniforms.into_iter().collect();
+        self
     }
 }
 

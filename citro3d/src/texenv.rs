@@ -102,8 +102,8 @@ pub struct Ops {
     pub alpha2: AlphaOp,
 }
 
-impl Default for Ops {
-    fn default() -> Self {
+impl Ops {
+    pub const fn default() -> Ops {
         Ops {
             rgb0: RGBOp::SrcColor,
             rgb1: RGBOp::SrcColor,
@@ -112,6 +112,12 @@ impl Default for Ops {
             alpha1: AlphaOp::SrcAlpha,
             alpha2: AlphaOp::SrcAlpha,
         }
+    }
+}
+
+impl Default for Ops {
+    fn default() -> Self {
+        Ops::default()
     }
 }
 
@@ -138,6 +144,20 @@ pub struct TexEnv<'a> {
     pub sources: Sources<'a>,
     pub ops: Ops,
 }
+
+pub const DEFAULT_TEXENV: TexEnv<'static> = TexEnv {
+    func: Func {
+        mode: Mode::BOTH,
+        combine: CombineFunc::Replace,
+    },
+    sources: Sources {
+        mode: Mode::BOTH,
+        source0: Source::PrimaryColor,
+        source1: None,
+        source2: None,
+    },
+    ops: Ops::default(),
+};
 
 impl TexEnv<'_> {
     pub(crate) unsafe fn setup_texenv(&self, env: &mut TexEnvInner) {

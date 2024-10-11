@@ -7,8 +7,8 @@ use citro3d::macros::include_shader;
 use citro3d::math::{
     AspectRatio, ClipPlanes, CoordinateOrientation, FVec3, Matrix4, Projection, StereoDisplacement,
 };
-use citro3d::render::ClearFlags;
-use citro3d::{attrib, buffer, render, shader, texenv, RenderParameters, RenderPass};
+use citro3d::render::{ClearFlags, Target};
+use citro3d::{attrib, buffer, shader, texenv, RenderPass};
 use ctru::prelude::*;
 use ctru::services::gfx::{RawFrameBuffer, Screen, TopScreen3D};
 
@@ -178,24 +178,15 @@ fn main() {
             for (target, proj) in targets {
                 target.clear(ClearFlags::ALL, CLEAR_COLOR, 0);
 
-                let pass = RenderPass {
-                    program: &program,
-                    target,
-                    vbo_data: vbo_slice,
-                    attribute_info: &attr_info,
-                    texenv_stages: &[stage0],
-                    params: RenderParameters {
-                        indices: Some(&index_buffer),
-                        primitive: buffer::Primitive::Triangles,
-                        vertex_uniforms: &[(
-                            projection_uniform_idx,
-                            (proj * camera_transform).into(),
-                        )],
-                        ..Default::default()
-                    },
-                };
+                let pass = RenderPass::new(&program, target, vbo_slice, &attr_info)
+                    .with_texenv_stages([stage0])
+                    .with_indices(&index_buffer)
+                    .with_vertex_uniforms([(
+                        projection_uniform_idx,
+                        (proj * camera_transform).into(),
+                    )]);
 
-                frame.draw(pass).unwrap();
+                frame.draw(&pass).unwrap();
             }
         });
     }

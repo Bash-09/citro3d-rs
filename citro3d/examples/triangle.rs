@@ -5,9 +5,9 @@
 
 use citro3d::macros::include_shader;
 use citro3d::math::{AspectRatio, ClipPlanes, Matrix4, Projection, StereoDisplacement};
-use citro3d::render::ClearFlags;
+use citro3d::render::{ClearFlags, Target};
 use citro3d::{attrib, buffer, shader};
-use citro3d::{texenv, RenderParameters, RenderPass};
+use citro3d::{texenv, RenderPass};
 use ctru::prelude::*;
 use ctru::services::gfx::{RawFrameBuffer, Screen, TopScreen3D};
 
@@ -128,20 +128,11 @@ fn main() {
             for (target, proj) in targets {
                 target.clear(ClearFlags::ALL, CLEAR_COLOR, 0);
 
-                let pass = RenderPass {
-                    program: &program,
-                    target,
-                    vbo_data,
-                    attribute_info: &attr_info,
-                    texenv_stages: &[stage0],
-                    params: RenderParameters {
-                        primitive: buffer::Primitive::Triangles,
-                        vertex_uniforms: &[(projection_uniform_idx, proj.into())],
-                        ..Default::default()
-                    },
-                };
+                let pass = RenderPass::new(&program, target, vbo_data, &attr_info)
+                    .with_vertex_uniforms([(projection_uniform_idx, proj.into())])
+                    .with_texenv_stages([stage0]);
 
-                frame.draw(pass).unwrap();
+                frame.draw(&pass).unwrap();
             }
         });
     }
