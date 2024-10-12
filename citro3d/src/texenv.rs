@@ -26,6 +26,14 @@ impl TexEnvInner {
             citro3d_sys::C3D_TexEnvInit(self.0);
         }
     }
+
+    /// Mark this texenv as dirty to ensure it is updated on the GPU
+    /// before any following draw calls.
+    pub(crate) fn dirty(&mut self) {
+        unsafe {
+            citro3d_sys::C3D_DirtyTexEnv(self.0);
+        }
+    }
 }
 
 /// Configure the texture combination function.

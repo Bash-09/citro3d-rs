@@ -92,6 +92,7 @@ impl Into<citro3d_sys::C3D_TexInitParams> for TextureParameters {
 pub struct Texture {
     pub(crate) tex: citro3d_sys::C3D_Tex,
     pub(crate) format: Format,
+    pub(crate) in_vram: bool,
 }
 
 impl Texture {
@@ -110,6 +111,7 @@ impl Texture {
         }
 
         let format = params.format;
+        let in_vram = params.on_vram;
         let params: citro3d_sys::C3D_TexInitParams = params.into();
 
         // SAFETY: C3D_Tex is only initialised here after citro3d_sys::C3d_TexInitWithParams returns success,
@@ -130,6 +132,7 @@ impl Texture {
             let mut tex = Texture {
                 tex: c3d_tex.assume_init(),
                 format,
+                in_vram,
             };
 
             // Set a default filter, as it won't render properly without one
@@ -171,6 +174,10 @@ impl Texture {
 
         if data.len() < size as usize {
             return Err(crate::Error::InvalidSize);
+        }
+
+        if self.in_vram && !crate::is_linear_ptr(data.as_ptr()) {
+            return Err(crate::Error::InvalidMemoryLocation);
         }
 
         // SAFETY: The `data` buffer has been verified to be long enough

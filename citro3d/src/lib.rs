@@ -34,7 +34,6 @@ use std::rc::Rc;
 
 use ctru::services::gfx::Screen;
 pub use error::{Error, Result};
-use texenv::DEFAULT_TEXENV;
 
 use self::buffer::Index;
 use self::texenv::TexEnvInner;
@@ -400,8 +399,13 @@ impl<'i, 'r> Frame<'i, 'r> {
             // Texenvs
             for i in 0..texenv::TEXENV_COUNT {
                 let texenv = self.instance.texenv(texenv::Stage::new(i).unwrap());
-                let stage = texenv_stages.get(i).unwrap_or(&DEFAULT_TEXENV);
-                stage.setup_texenv(texenv);
+                texenv.reset();
+
+                if let Some(stage) = texenv_stages.get(i) {
+                    stage.setup_texenv(texenv);
+                }
+
+                texenv.dirty();
             }
 
             // Draw arrays or elements
@@ -535,6 +539,8 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
         self
     }
 
+    /// Set the vertex uniform values to use for this invocation of the shader program.
+    /// This will clear any previously set uniforms and only use the new ones provided.
     pub fn with_vertex_uniforms(
         mut self,
         uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
@@ -543,6 +549,8 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
         self
     }
 
+    /// Set the geometry uniform values to use for this invocation of the shader program.
+    /// This will clear any previously set uniforms and only use the new ones provided.
     pub fn with_geometry_uniforms(
         mut self,
         uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
@@ -550,6 +558,13 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
         self.geometry_uniforms = uniforms.into_iter().collect();
         self
     }
+}
+
+/// Check if pointer is in linear memory
+pub fn is_linear_ptr<P>(p: *const P) -> bool {
+    let addr = p as usize;
+    addr >= ctru_sys::OS_FCRAM_VADDR as usize
+        && addr < (ctru_sys::OS_FCRAM_VADDR as usize + ctru_sys::OS_FCRAM_SIZE as usize)
 }
 
 #[cfg(test)]
