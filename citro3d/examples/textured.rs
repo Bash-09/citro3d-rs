@@ -118,23 +118,12 @@ fn main() {
     let mut buf_info = buffer::Info::new();
     let (attr_info, vbo_data) = prepare_vbos(&mut buf_info, &vbo_data);
 
-    let tex = create_texture();
+    let texture = create_texture();
 
     // Configure the first fragment shading substage to just pass through the vertex color
     // See https://www.opengl.org/sdk/docs/man2/xhtml/glTexEnv.xml for more insight
-    let stage0 = texenv::TexEnv {
-        func: texenv::Func {
-            mode: texenv::Mode::BOTH,
-            combine: texenv::CombineFunc::Replace,
-        },
-        sources: texenv::Sources {
-            mode: texenv::Mode::BOTH,
-            source0: texenv::Source::Texture0(&tex),
-            source1: None,
-            source2: None,
-        },
-        ops: Default::default(),
-    };
+    let stage0 =
+        texenv::TexEnv::new().sources(texenv::Mode::BOTH, texenv::Source::Texture0, None, None);
 
     let projection_uniform_idx = program.get_uniform("projection").unwrap();
 
@@ -157,7 +146,8 @@ fn main() {
                 target.clear(ClearFlags::ALL, CLEAR_COLOR, 0);
 
                 let pass = RenderPass::new(&program, target, vbo_data, &attr_info)
-                    .with_texenv_stages([stage0])
+                    .with_texture(texture::TexUnit::TexUnit0, &texture)
+                    .with_texenv_stages([&stage0])
                     .with_vertex_uniforms([(projection_uniform_idx, proj.into())]);
 
                 frame.draw(&pass).unwrap();

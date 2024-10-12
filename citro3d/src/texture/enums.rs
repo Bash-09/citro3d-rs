@@ -77,6 +77,13 @@ pub enum TexUnit {
     TexUnit3 = 3,
 }
 
+pub const TEXUNITS: [TexUnit; 4] = [
+    TexUnit::TexUnit0,
+    TexUnit::TexUnit1,
+    TexUnit::TexUnit2,
+    TexUnit::TexUnit3,
+];
+
 /// Supported texture formats.
 #[doc(alias = "GPU_TEXCOLOR")]
 #[allow(missing_docs)]

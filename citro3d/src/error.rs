@@ -45,6 +45,9 @@ pub enum Error {
         /// The length of the collection.
         len: libc::c_int,
     },
+    /// This texture unit was used in one of the texenv stages but no texture
+    /// was bound to this unit.
+    MissingTexture(crate::texture::TexUnit),
 }
 
 impl From<TryFromIntError> for Error {

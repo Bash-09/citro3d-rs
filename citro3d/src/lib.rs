@@ -27,16 +27,16 @@ pub mod texenv;
 pub mod texture;
 pub mod uniform;
 
-use std::cell::{OnceCell, RefMut};
+use std::cell::RefMut;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
 use ctru::services::gfx::Screen;
 pub use error::{Error, Result};
+use texenv::TEXENV_COUNT;
 
 use self::buffer::Index;
-use self::texenv::TexEnvInner;
 use self::uniform::Uniform;
 
 pub mod macros {
@@ -55,7 +55,6 @@ mod private {
 #[non_exhaustive]
 #[must_use]
 pub struct Instance {
-    texenvs: [OnceCell<TexEnvInner>; texenv::TEXENV_COUNT],
     queue: Rc<RenderQueue>,
 }
 
@@ -90,15 +89,6 @@ impl Instance {
     pub fn with_cmdbuf_size(size: usize) -> Result<Self> {
         if unsafe { citro3d_sys::C3D_Init(size) } {
             Ok(Self {
-                texenvs: [
-                    // thank goodness there's only six of them!
-                    OnceCell::new(),
-                    OnceCell::new(),
-                    OnceCell::new(),
-                    OnceCell::new(),
-                    OnceCell::new(),
-                    OnceCell::new(),
-                ],
                 queue: Rc::new(RenderQueue),
             })
         } else {
@@ -302,27 +292,6 @@ impl Instance {
     pub fn bind_geometry_uniform(&mut self, index: uniform::Index, uniform: impl Into<Uniform>) {
         uniform.into().bind(self, shader::Type::Geometry, index);
     }
-
-    /// Retrieve the [`TexEnv`] for the given stage, initializing it first if necessary.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use citro3d::texenv;
-    /// # let _runner = test_runner::GdbRunner::default();
-    /// # let mut instance = citro3d::Instance::new().unwrap();
-    /// let stage0 = texenv::Stage::new(0).unwrap();
-    /// let texenv0 = instance.texenv(stage0);
-    /// ```
-    #[doc(alias = "C3D_GetTexEnv")]
-    #[doc(alias = "C3D_TexEnvInit")]
-    fn texenv(&mut self, stage: texenv::Stage) -> &mut texenv::TexEnvInner {
-        let texenv = &mut self.texenvs[stage.0];
-        texenv.get_or_init(|| TexEnvInner::new(stage));
-        // We have to do this weird unwrap to get a mutable reference,
-        // since there is no `get_mut_or_init` or equivalent
-        texenv.get_mut().unwrap()
-    }
 }
 
 // This only exists to be an alias, which admittedly is kinda silly. The default
@@ -371,14 +340,32 @@ impl<'i, 'r> Frame<'i, 'r> {
             vbo_data,
             attribute_info,
             texenv_stages,
+            textures,
             primitive,
             indices,
             vertex_uniforms,
             geometry_uniforms,
         } = pass;
 
-        if texenv_stages.is_empty() {
-            return Err(Error::InvalidSize);
+        // Ensure all required textures are present
+        for src in texenv_stages
+            .iter()
+            .take(TEXENV_COUNT)
+            .flat_map(|te| te.sources.iter())
+        {
+            let texunit = match src {
+                texenv::Source::Texture0 => Some(texture::TexUnit::TexUnit0),
+                texenv::Source::Texture1 => Some(texture::TexUnit::TexUnit1),
+                texenv::Source::Texture2 => Some(texture::TexUnit::TexUnit2),
+                texenv::Source::Texture3 => Some(texture::TexUnit::TexUnit3),
+                _ => None,
+            };
+
+            if let Some(texunit) = texunit {
+                if textures[texunit as usize].is_none() {
+                    return Err(Error::MissingTexture(texunit));
+                }
+            }
         }
 
         unsafe {
@@ -398,14 +385,24 @@ impl<'i, 'r> Frame<'i, 'r> {
 
             // Texenvs
             for i in 0..texenv::TEXENV_COUNT {
-                let texenv = self.instance.texenv(texenv::Stage::new(i).unwrap());
-                texenv.reset();
-
-                if let Some(stage) = texenv_stages.get(i) {
-                    stage.setup_texenv(texenv);
+                if let Some(texenv) = texenv_stages.get(i) {
+                    texenv
+                        .set_texenv(i)
+                        .expect("Texenv stage should always be in bounds");
+                } else {
+                    let texenv = citro3d_sys::C3D_GetTexEnv(i as i32);
+                    if !texenv.is_null() {
+                        citro3d_sys::C3D_TexEnvInit(texenv);
+                        citro3d_sys::C3D_DirtyTexEnv(texenv);
+                    }
                 }
+            }
 
-                texenv.dirty();
+            // Textures
+            for (texture, texunit) in textures.iter().zip(texture::TEXUNITS) {
+                if let Some(texture) = texture {
+                    texture.bind(texunit);
+                }
             }
 
             // Draw arrays or elements
@@ -437,7 +434,8 @@ pub struct RenderPass<'k, 'buf, T: render::Target, I: Index> {
     pub attribute_info: &'k attrib::Info,
     /// The [`texenv::TexEnv`] stages used to combine shader outputs and textures.
     /// There must be at least 1 and at most 6 provided, any more than 6 will be ignored.
-    pub texenv_stages: Vec<texenv::TexEnv<'k>>,
+    pub texenv_stages: Vec<texenv::TexEnv>,
+    pub textures: [Option<&'k texture::Texture>; 4],
     pub primitive: buffer::Primitive,
     pub indices: Option<&'k buffer::Indices<'buf, I>>,
     pub vertex_uniforms: Vec<(uniform::Index, Uniform)>,
@@ -457,6 +455,7 @@ impl<'k, 'buf, T: render::Target> RenderPass<'k, 'buf, T, u8> {
             vbo_data,
             attribute_info,
             texenv_stages: Vec::new(),
+            textures: [None; 4],
             primitive: buffer::Primitive::Triangles,
             indices: None,
             vertex_uniforms: Vec::new(),
@@ -473,6 +472,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
             vbo_data: self.vbo_data,
             attribute_info: self.attribute_info,
             texenv_stages: self.texenv_stages,
+            textures: self.textures,
             primitive: self.primitive,
             indices: None,
             vertex_uniforms: self.vertex_uniforms,
@@ -492,6 +492,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
             vbo_data: self.vbo_data,
             attribute_info: self.attribute_info,
             texenv_stages: self.texenv_stages,
+            textures: self.textures,
             primitive: self.primitive,
             indices: self.indices,
             vertex_uniforms: self.vertex_uniforms,
@@ -509,6 +510,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
             vbo_data: self.vbo_data,
             attribute_info: self.attribute_info,
             texenv_stages: self.texenv_stages,
+            textures: self.textures,
             primitive: self.primitive,
             indices: Some(indices),
             vertex_uniforms: self.vertex_uniforms,
@@ -526,11 +528,22 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
         self
     }
 
-    pub fn with_texenv_stages(
+    pub fn with_texenv_stages<'a>(
         mut self,
-        texenvs: impl IntoIterator<Item = texenv::TexEnv<'k>>,
+        texenvs: impl IntoIterator<Item = &'a texenv::TexEnv>,
     ) -> RenderPass<'k, 'buf, T, I> {
-        self.texenv_stages = texenvs.into_iter().collect();
+        self.texenv_stages = texenvs.into_iter().cloned().collect();
+        self
+    }
+
+    /// Bind the given texture to the chosen texture unit for this render pass
+    /// (for use in the [`TexEnv`] stages)
+    pub fn with_texture(
+        mut self,
+        texture_unit: texture::TexUnit,
+        texture: &'k texture::Texture,
+    ) -> RenderPass<'k, 'buf, T, I> {
+        self.textures[texture_unit as usize] = Some(texture);
         self
     }
 

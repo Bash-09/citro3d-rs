@@ -94,19 +94,8 @@ fn main() {
 
     // Configure the first fragment shading substage to just pass through the vertex color
     // See https://www.opengl.org/sdk/docs/man2/xhtml/glTexEnv.xml for more insight
-    let stage0 = texenv::TexEnv {
-        func: texenv::Func {
-            mode: texenv::Mode::BOTH,
-            combine: texenv::CombineFunc::Replace,
-        },
-        sources: texenv::Sources {
-            mode: texenv::Mode::BOTH,
-            source0: texenv::Source::PrimaryColor,
-            source1: None,
-            source2: None,
-        },
-        ops: Default::default(),
-    };
+    let stage0 =
+        texenv::TexEnv::new().sources(texenv::Mode::BOTH, texenv::Source::PrimaryColor, None, None);
 
     let projection_uniform_idx = program.get_uniform("projection").unwrap();
 
@@ -130,7 +119,7 @@ fn main() {
 
                 let pass = RenderPass::new(&program, target, vbo_data, &attr_info)
                     .with_vertex_uniforms([(projection_uniform_idx, proj.into())])
-                    .with_texenv_stages([stage0]);
+                    .with_texenv_stages([&stage0]);
 
                 frame.draw(&pass).unwrap();
             }

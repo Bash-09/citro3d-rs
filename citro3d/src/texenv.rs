@@ -5,173 +5,177 @@ use std::fmt::Debug;
 
 use bitflags::bitflags;
 
-use crate::texture;
-
 // https://oreo639.github.io/citro3d/texenv_8h.html#a9eda91f8e7252c91f873b1d43e3728b6
 pub(crate) const TEXENV_COUNT: usize = 6;
-
-#[doc(alias = "C3D_TexEnv")]
-pub(crate) struct TexEnvInner(*mut citro3d_sys::C3D_TexEnv);
-
-impl TexEnvInner {
-    pub(crate) fn new(stage: Stage) -> Self {
-        let mut result = unsafe { Self(citro3d_sys::C3D_GetTexEnv(stage.0 as _)) };
-        result.reset();
-        result
-    }
-
-    /// Re-initialize the texture combiner to its default state.
-    pub(crate) fn reset(&mut self) {
-        unsafe {
-            citro3d_sys::C3D_TexEnvInit(self.0);
-        }
-    }
-
-    /// Mark this texenv as dirty to ensure it is updated on the GPU
-    /// before any following draw calls.
-    pub(crate) fn dirty(&mut self) {
-        unsafe {
-            citro3d_sys::C3D_DirtyTexEnv(self.0);
-        }
-    }
-}
-
-/// Configure the texture combination function.
-#[derive(Debug, Clone, Copy)]
-pub struct Func {
-    /// The [`Mode`]\(s) the combination function will apply to.
-    pub mode: Mode,
-    /// The [`CombineFunc`] used to combine textures.
-    pub combine: CombineFunc,
-}
-
-impl Func {
-    /// Set the combine func for the given TexEnv
-    #[doc(alias = "C3D_TexEnvFunc")]
-    unsafe fn set_func(&self, env: &mut TexEnvInner) {
-        citro3d_sys::C3D_TexEnvFunc(env.0, self.mode.bits(), self.combine as _);
-    }
-}
-
-/// Configure the source values of the texture combiner.
-#[derive(Clone, Copy)]
-pub struct Sources<'a> {
-    /// Which [`Mode`]\(s) to set the sourc operand(s) for.
-    pub mode: Mode,
-    /// The first [`Source`] operand to the texture combiner
-    pub source0: Source<'a>,
-    /// Optional additional [`Source`] operand to use
-    pub source1: Option<Source<'a>>,
-    /// Optional additional [`Source`] operand to use
-    pub source2: Option<Source<'a>>,
-}
-
-impl Sources<'_> {
-    /// Set the sources for the given TexEnv, and binds the textures to the appropriate texture units.
-    #[doc(alias = "C3D_TexEnvSrc")]
-    #[doc(alias = "C3D_TexBind")]
-    unsafe fn set_and_bind_texture_sources(&self, env: &mut TexEnvInner) {
-        let handle_source = |source| {
-            match source {
-                Source::Texture0(t) => t.bind(texture::TexUnit::TexUnit0),
-                Source::Texture1(t) => t.bind(texture::TexUnit::TexUnit1),
-                Source::Texture2(t) => t.bind(texture::TexUnit::TexUnit2),
-                Source::Texture3(t) => t.bind(texture::TexUnit::TexUnit3),
-                _ => {}
-            };
-        };
-
-        let source0 = self.source0;
-        let source1 = self.source1.unwrap_or(Source::PrimaryColor);
-        let source2 = self.source2.unwrap_or(Source::PrimaryColor);
-
-        handle_source(source0);
-        handle_source(source1);
-        handle_source(source2);
-
-        citro3d_sys::C3D_TexEnvSrc(
-            env.0,
-            self.mode.bits(),
-            SourceInner::from(source0) as _,
-            SourceInner::from(source1) as _,
-            SourceInner::from(source2) as _,
-        );
-    }
-}
-
-/// Configure the operations on the texture combiner
-#[derive(Clone, Copy)]
-pub struct Ops {
-    pub rgb0: RGBOp,
-    pub rgb1: RGBOp,
-    pub rgb2: RGBOp,
-    pub alpha0: AlphaOp,
-    pub alpha1: AlphaOp,
-    pub alpha2: AlphaOp,
-}
-
-impl Ops {
-    pub const fn default() -> Ops {
-        Ops {
-            rgb0: RGBOp::SrcColor,
-            rgb1: RGBOp::SrcColor,
-            rgb2: RGBOp::SrcColor,
-            alpha0: AlphaOp::SrcAlpha,
-            alpha1: AlphaOp::SrcAlpha,
-            alpha2: AlphaOp::SrcAlpha,
-        }
-    }
-}
-
-impl Default for Ops {
-    fn default() -> Self {
-        Ops::default()
-    }
-}
-
-impl Ops {
-    fn set_ops(&self, env: &TexEnvInner) {
-        unsafe {
-            citro3d_sys::C3D_TexEnvOpRgb(env.0, self.rgb0 as _, self.rgb1 as _, self.rgb2 as _);
-            citro3d_sys::C3D_TexEnvOpAlpha(
-                env.0,
-                self.alpha0 as _,
-                self.alpha1 as _,
-                self.alpha2 as _,
-            );
-        }
-    }
-}
 
 /// A texture combiner, also called a "texture environment" (hence the struct name).
 /// See also [`texenv.h` documentation](https://oreo639.github.io/citro3d/texenv_8h.html).
 #[derive(Clone, Copy)]
 #[doc(alias = "C3D_TexEnv")]
-pub struct TexEnv<'a> {
-    pub func: Func,
-    pub sources: Sources<'a>,
-    pub ops: Ops,
+pub struct TexEnv {
+    inner: citro3d_sys::C3D_TexEnv,
+
+    // For checking that necessary textures are bound
+    pub(crate) sources: [Source; 6],
 }
 
-pub const DEFAULT_TEXENV: TexEnv<'static> = TexEnv {
-    func: Func {
-        mode: Mode::BOTH,
-        combine: CombineFunc::Replace,
-    },
-    sources: Sources {
-        mode: Mode::BOTH,
-        source0: Source::PrimaryColor,
-        source1: None,
-        source2: None,
-    },
-    ops: Ops::default(),
-};
+impl TexEnv {
+    pub fn as_raw(&self) -> *mut citro3d_sys::C3D_TexEnv {
+        &self.inner as *const _ as *mut _
+    }
 
-impl TexEnv<'_> {
-    pub(crate) unsafe fn setup_texenv(&self, env: &mut TexEnvInner) {
-        self.sources.set_and_bind_texture_sources(env);
-        self.func.set_func(env);
-        self.ops.set_ops(env);
+    /// Create a new texture combiner stage, or "texture environment"
+    #[doc(alias = "C3D_TexEnvInit")]
+    pub fn new() -> TexEnv {
+        let inner = unsafe {
+            let mut inner = core::mem::MaybeUninit::<citro3d_sys::C3D_TexEnv>::uninit();
+            citro3d_sys::C3D_TexEnvInit(inner.as_mut_ptr());
+            inner.assume_init()
+        };
+
+        TexEnv {
+            inner,
+            sources: [Source::default(); 6],
+        }
+    }
+
+    #[doc(alias = "C3D_TexEnvInit")]
+    pub fn reset(self) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvInit(self.as_raw());
+        }
+
+        TexEnv {
+            inner: self.inner,
+            sources: [Source::default(); 6],
+        }
+    }
+
+    /// Set the sources to use for the rgb and/or alpha components of this texenv stage.
+    /// If sourcing from a texture unit, ensure a texture is also bound to that unit
+    /// with [`RenderPass::with_texture`]
+    #[doc(alias = "C3D_TexEnvSrc")]
+    pub fn sources(
+        mut self,
+        mode: Mode,
+        source0: Source,
+        source1: Option<Source>,
+        source2: Option<Source>,
+    ) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvSrc(
+                self.as_raw(),
+                mode.bits(),
+                source0 as _,
+                source1.unwrap_or_default() as _,
+                source2.unwrap_or_default() as _,
+            );
+        }
+
+        if mode.contains(Mode::RGB) {
+            self.sources[0] = source0;
+            self.sources[1] = source1.unwrap_or_default();
+            self.sources[2] = source2.unwrap_or_default();
+        }
+
+        if mode.contains(Mode::ALPHA) {
+            self.sources[3] = source0;
+            self.sources[4] = source1.unwrap_or_default();
+            self.sources[5] = source2.unwrap_or_default();
+        }
+
+        self
+    }
+
+    #[doc(alias = "C3D_TexEnvOpRgb")]
+    pub fn op_rgb(self, o1: RGBOp, o2: Option<RGBOp>, o3: Option<RGBOp>) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvOpRgb(
+                self.as_raw(),
+                o1 as _,
+                o2.unwrap_or_default() as _,
+                o3.unwrap_or_default() as _,
+            );
+        }
+        self
+    }
+
+    #[doc(alias = "C3D_TexEnvOpAlpha")]
+    pub fn op_alpha(self, o1: AlphaOp, o2: Option<AlphaOp>, o3: Option<AlphaOp>) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvOpAlpha(
+                self.as_raw(),
+                o1 as _,
+                o2.unwrap_or_default() as _,
+                o3.unwrap_or_default() as _,
+            );
+        }
+        self
+    }
+
+    #[doc(alias = "C3D_TexEnvFunc")]
+    pub fn func(self, mode: Mode, func: CombineFunc) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvFunc(self.as_raw(), mode.bits(), func as _);
+        }
+        self
+    }
+
+    #[doc(alias = "C3D_TexEnvColor")]
+    pub fn color(self, color: u32) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvColor(self.as_raw(), color);
+        }
+        self
+    }
+
+    #[doc(alias = "C3D_TexEnvScale")]
+    pub fn scale(self, mode: Mode, scale: Scale) -> TexEnv {
+        unsafe {
+            citro3d_sys::C3D_TexEnvScale(self.as_raw(), mode.bits() as _, scale as _);
+        }
+        self
+    }
+
+    /// Set this as the active texenv in the given stage. Usually this function
+    /// does not need to be called by the user, as it will be called as part of
+    /// the [`RenderPass`] in [`Frame::draw`]
+    #[must_use]
+    #[doc(alias = "C3D_SetTexEnv")]
+    pub fn set_texenv(&self, stage: usize) -> crate::Result<()> {
+        if stage >= TEXENV_COUNT {
+            return Err(crate::Error::IndexOutOfBounds {
+                idx: stage as i32,
+                len: TEXENV_COUNT as i32,
+            });
+        }
+
+        unsafe {
+            citro3d_sys::C3D_SetTexEnv(stage as i32, self.as_raw());
+        }
+
+        Ok(())
+    }
+}
+
+/// Configure the source values of the texture combiner.
+#[derive(Clone, Copy)]
+pub struct Sources {
+    /// The first [`Source`] operand to the texture combiner
+    pub source0: Source,
+    /// Optional additional [`Source`] operand to use
+    pub source1: Option<Source>,
+    /// Optional additional [`Source`] operand to use
+    pub source2: Option<Source>,
+}
+
+impl Default for Sources {
+    fn default() -> Self {
+        Sources {
+            source0: Source::PrimaryColor,
+            source1: None,
+            source2: None,
+        }
     }
 }
 
@@ -191,10 +195,11 @@ bitflags! {
 /// A source operand of a [`TexEnv`]'s texture combination.
 #[doc(alias = "GPU_TEVSRC")]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(u8)]
 #[non_exhaustive]
-pub(crate) enum SourceInner {
+pub enum Source {
+    #[default]
     PrimaryColor = ctru_sys::GPU_PRIMARY_COLOR,
     FragmentPrimaryColor = ctru_sys::GPU_FRAGMENT_PRIMARY_COLOR,
     FragmentSecondaryColor = ctru_sys::GPU_FRAGMENT_SECONDARY_COLOR,
@@ -207,58 +212,14 @@ pub(crate) enum SourceInner {
     Previous = ctru_sys::GPU_PREVIOUS,
 }
 
-/// A source operand of a [`TexEnv`]'s texture combination, containing the textures to be used.
-#[doc(alias = "GPU_TEVSRC")]
-#[derive(Clone, Copy)]
-pub enum Source<'a> {
-    PrimaryColor,
-    FragmentPrimaryColor,
-    FragmentSecondaryColor,
-    Texture0(&'a texture::Texture),
-    Texture1(&'a texture::Texture),
-    Texture2(&'a texture::Texture),
-    Texture3(&'a texture::Texture),
-    PreviousBuffer,
-    Constant,
-    Previous,
-}
-
-impl Debug for Source<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", SourceInner::from(self))
-    }
-}
-
-impl From<&Source<'_>> for SourceInner {
-    fn from(value: &Source<'_>) -> Self {
-        match value {
-            Source::PrimaryColor => SourceInner::PrimaryColor,
-            Source::FragmentPrimaryColor => SourceInner::FragmentPrimaryColor,
-            Source::FragmentSecondaryColor => SourceInner::FragmentSecondaryColor,
-            Source::Texture0(_) => SourceInner::Texture0,
-            Source::Texture1(_) => SourceInner::Texture1,
-            Source::Texture2(_) => SourceInner::Texture2,
-            Source::Texture3(_) => SourceInner::Texture3,
-            Source::PreviousBuffer => SourceInner::PreviousBuffer,
-            Source::Constant => SourceInner::Constant,
-            Source::Previous => SourceInner::Previous,
-        }
-    }
-}
-
-impl From<Source<'_>> for SourceInner {
-    fn from(value: Source<'_>) -> Self {
-        SourceInner::from(&value)
-    }
-}
-
 /// The combination function to apply to the [`TexEnv`] operands.
 #[doc(alias = "GPU_COMBINEFUNC")]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum CombineFunc {
+    #[default]
     Replace = ctru_sys::GPU_REPLACE,
     Modulate = ctru_sys::GPU_MODULATE,
     Add = ctru_sys::GPU_ADD,
@@ -273,10 +234,11 @@ pub enum CombineFunc {
 /// The RGB combiner operands.
 #[doc(alias = "GPU_TEVOP_RGB")]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum RGBOp {
+    #[default]
     SrcColor = ctru_sys::GPU_TEVOP_RGB_SRC_COLOR,
     OneMinusSrcColor = ctru_sys::GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,
     SrcAlpha = ctru_sys::GPU_TEVOP_RGB_SRC_ALPHA,
@@ -292,10 +254,11 @@ pub enum RGBOp {
 /// The Alpha combiner operands.
 #[doc(alias = "GPU_TEVOP_RGB")]
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum AlphaOp {
+    #[default]
     SrcAlpha = ctru_sys::GPU_TEVOP_A_SRC_ALPHA,
     OneMinusSrcAlpha = ctru_sys::GPU_TEVOP_A_ONE_MINUS_SRC_ALPHA,
     SrcRed = ctru_sys::GPU_TEVOP_A_SRC_R,
@@ -306,15 +269,13 @@ pub enum AlphaOp {
     OneMinusSrcBlue = ctru_sys::GPU_TEVOP_A_ONE_MINUS_SRC_B,
 }
 
-/// A texture combination stage identifier. This index doubles as the order
-/// in which texture combinations will be applied.
-// (I think?)
-#[derive(Copy, Clone, Debug)]
-pub(crate) struct Stage(pub(crate) usize);
-
-impl Stage {
-    /// Get a stage index. Valid indices range from 0 to 5.
-    pub(crate) fn new(index: usize) -> Option<Self> {
-        (index < 6).then_some(Self(index))
-    }
+#[doc(alias = "GPU_TEVSCALE")]
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum Scale {
+    #[default]
+    X1 = ctru_sys::GPU_TEVSCALE_1,
+    X2 = ctru_sys::GPU_TEVSCALE_2,
+    X4 = ctru_sys::GPU_TEVSCALE_4,
 }
