@@ -1,13 +1,13 @@
 #![feature(allocator_api)]
-use std::f32::consts::PI;
+use std::{f32::consts::PI, pin::pin};
 
 use citro3d::{
     attrib, buffer,
-    light::{FresnelSelector, LightEnv, LightLut, LightLutDistAtten, LightLutId, LutInput},
+    light::{self, FresnelSelector, LightEnv, LightLut, LightLutDistAtten, LightLutId, LutInput},
     material::{Color, Material},
     math::{AspectRatio, ClipPlanes, FVec3, FVec4, Matrix4, Projection, StereoDisplacement},
-    render::{self, ClearFlags},
-    shader, texenv,
+    render::{self, ClearFlags, Target},
+    shader, texenv, RenderPass,
 };
 use citro3d_macros::include_shader;
 use ctru::services::{
@@ -300,17 +300,15 @@ fn main() {
         .expect("failed to create bottom screen render target");
 
     let shader = shader::Library::from_bytes(SHADER_BYTES).unwrap();
-    let vertex_shader = shader.get(0).unwrap();
-
-    let program = shader::Program::new(vertex_shader).unwrap();
-    instance.bind_program(&program);
+    let program = shader::Program::new(shader, 0).unwrap();
 
     let mut vbo_data = Vec::with_capacity_in(VERTICES.len(), ctru::linear::LinearAllocator);
     vbo_data.extend_from_slice(VERTICES);
 
     let mut buf_info = buffer::Info::new();
     let (attr_info, vbo_data) = prepare_vbos(&mut buf_info, &vbo_data);
-    let mut light_env = instance.light_env_mut();
+    let mut light_env = light::LightEnv::new();
+    let mut light_env = pin!(light_env);
     light_env.as_mut().connect_lut(
         LightLutId::D0,
         LutInput::LightNormal,
@@ -334,14 +332,13 @@ fn main() {
     let mut c = Matrix4::identity();
     let model_idx = program.get_uniform("modelView").unwrap();
     c.translate(0.0, 0.0, -2.0);
+
     instance.bind_vertex_uniform(model_idx, &c);
 
     // Configure the first fragment shading substage to just pass through the vertex color
     // See https://www.opengl.org/sdk/docs/man2/xhtml/glTexEnv.xml for more insight
-    let stage0 = texenv::Stage::new(0).unwrap();
-    instance
-        .texenv(stage0)
-        .src(
+    let stage0 = texenv::TexEnv::new()
+        .sources(
             texenv::Mode::BOTH,
             texenv::Source::FragmentPrimaryColor,
             Some(texenv::Source::FragmentSecondaryColor),
@@ -358,31 +355,27 @@ fn main() {
             break;
         }
 
-        instance.render_frame_with(|instance| {
-            let mut render_to = |target: &mut render::Target, projection| {
+        let projections = calculate_projections();
+        let targets = [
+            (&mut top_left_target, projections.left_eye),
+            (&mut top_right_target, projections.right_eye),
+            (&mut bottom_target, projections.center),
+        ];
+
+        instance.render_frame_with(|frame| {
+            for (target, proj) in targets {
                 target.clear(ClearFlags::ALL, 0, 0);
 
-                instance
-                    .select_render_target(target)
-                    .expect("failed to set render target");
+                let pass = RenderPass::new(&program, target, vbo_data, &attr_info)
+                    .with_texenv_stages([&stage0])
+                    .with_lightenv(&light_env)
+                    .with_vertex_uniforms([
+                        (projection_uniform_idx, proj.into()),
+                        (model_idx, (&c).into()),
+                    ]);
 
-                instance.bind_vertex_uniform(projection_uniform_idx, projection);
-                instance.bind_vertex_uniform(model_idx, &c);
-
-                instance.set_attr_info(&attr_info);
-
-                instance.draw_arrays(buffer::Primitive::Triangles, vbo_data);
-            };
-
-            let Projections {
-                left_eye,
-                right_eye,
-                center,
-            } = calculate_projections();
-
-            render_to(&mut top_left_target, &left_eye);
-            render_to(&mut top_right_target, &right_eye);
-            render_to(&mut bottom_target, &center);
+                frame.draw(&pass).unwrap();
+            }
         });
         c.translate(0.0, 0.0, 2.0);
         c.rotate_y(1.0f32.to_radians());

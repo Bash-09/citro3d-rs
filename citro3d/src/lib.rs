@@ -32,7 +32,6 @@ pub mod uniform;
 use std::cell::RefMut;
 use std::fmt;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::rc::Rc;
 
 use ctru::services::gfx::Screen;
@@ -59,7 +58,6 @@ mod private {
 #[must_use]
 pub struct Instance {
     queue: Rc<RenderQueue>,
-    light_env: Pin<Box<light::LightEnv>>,
 }
 
 /// Representation of `citro3d`'s internal render queue. This is something that
@@ -92,15 +90,8 @@ impl Instance {
     #[doc(alias = "C3D_Init")]
     pub fn with_cmdbuf_size(size: usize) -> Result<Self> {
         if unsafe { citro3d_sys::C3D_Init(size) } {
-            let mut light_env = Box::pin(light::LightEnv::new());
-            unsafe {
-                // setup the light env slot, since this is a pointer copy it will stick around even with we swap
-                // out light_env later
-                citro3d_sys::C3D_LightEnvBind(light_env.as_mut().as_raw_mut());
-            }
             Ok(Self {
                 queue: Rc::new(RenderQueue),
-                light_env,
             })
         } else {
             Err(Error::FailedToInitialize)
@@ -267,9 +258,6 @@ impl Instance {
         // accessing undefined memory if it moves (e.g. because it went out of scope)
         citro3d_sys::C3D_BindProgram(program.as_raw().cast_mut());
     }
-    pub fn light_env_mut(&mut self) -> Pin<&mut light::LightEnv> {
-        self.light_env.as_mut()
-    }
 
     /// Bind a uniform to the given `index` in the vertex shader for the next draw call.
     ///
@@ -359,6 +347,7 @@ impl<'i, 'r> Frame<'i, 'r> {
             indices,
             vertex_uniforms,
             geometry_uniforms,
+            lightenv,
         } = pass;
 
         // Ensure all required textures are present
@@ -419,6 +408,12 @@ impl<'i, 'r> Frame<'i, 'r> {
                 }
             }
 
+            // Light env
+            let lightenv: *mut citro3d_sys::C3D_LightEnv = lightenv
+                .map(|le| le.as_raw() as *const _ as *mut _)
+                .unwrap_or(core::ptr::null_mut());
+            citro3d_sys::C3D_LightEnvBind(lightenv);
+
             // Draw arrays or elements
             if let Some(indices) = indices {
                 self.instance.draw_elements(*primitive, *vbo_data, indices);
@@ -454,6 +449,7 @@ pub struct RenderPass<'k, 'buf, T: render::Target, I: Index> {
     pub indices: Option<&'k buffer::Indices<'buf, I>>,
     pub vertex_uniforms: Vec<(uniform::Index, Uniform)>,
     pub geometry_uniforms: Vec<(uniform::Index, Uniform)>,
+    pub lightenv: Option<&'k light::LightEnv>,
 }
 
 impl<'k, 'buf, T: render::Target> RenderPass<'k, 'buf, T, u8> {
@@ -474,6 +470,7 @@ impl<'k, 'buf, T: render::Target> RenderPass<'k, 'buf, T, u8> {
             indices: None,
             vertex_uniforms: Vec::new(),
             geometry_uniforms: Vec::new(),
+            lightenv: None,
         }
     }
 }
@@ -491,6 +488,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
             indices: None,
             vertex_uniforms: self.vertex_uniforms,
             geometry_uniforms: self.geometry_uniforms,
+            lightenv: self.lightenv,
         }
     }
 
@@ -511,6 +509,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
             indices: self.indices,
             vertex_uniforms: self.vertex_uniforms,
             geometry_uniforms: self.geometry_uniforms,
+            lightenv: self.lightenv,
         }
     }
 
@@ -529,6 +528,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
             indices: Some(indices),
             vertex_uniforms: self.vertex_uniforms,
             geometry_uniforms: self.geometry_uniforms,
+            lightenv: self.lightenv,
         }
     }
 
@@ -583,6 +583,16 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
         uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
     ) -> RenderPass<'k, 'buf, T, I> {
         self.geometry_uniforms = uniforms.into_iter().collect();
+        self
+    }
+
+    pub fn with_lightenv(mut self, lightenv: &'k light::LightEnv) -> RenderPass<'k, 'buf, T, I> {
+        self.lightenv = Some(lightenv);
+        self
+    }
+
+    pub fn no_lightenv(mut self) -> RenderPass<'k, 'buf, T, I> {
+        self.lightenv = None;
         self
     }
 }
