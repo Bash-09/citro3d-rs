@@ -273,7 +273,11 @@ impl Instance {
     /// let mtx = Matrix4::identity();
     /// instance.bind_vertex_uniform(idx, &mtx);
     /// ```
-    pub fn bind_vertex_uniform(&mut self, index: uniform::Index, uniform: impl Into<Uniform>) {
+    pub fn bind_vertex_uniform<'a>(
+        &mut self,
+        index: uniform::Index,
+        uniform: impl Into<Uniform<'a>>,
+    ) {
         uniform.into().bind(self, shader::Type::Vertex, index);
     }
 
@@ -291,7 +295,11 @@ impl Instance {
     /// let mtx = Matrix4::identity();
     /// instance.bind_geometry_uniform(idx, &mtx);
     /// ```
-    pub fn bind_geometry_uniform(&mut self, index: uniform::Index, uniform: impl Into<Uniform>) {
+    pub fn bind_geometry_uniform<'a>(
+        &mut self,
+        index: uniform::Index,
+        uniform: impl Into<Uniform<'a>>,
+    ) {
         uniform.into().bind(self, shader::Type::Geometry, index);
     }
 }
@@ -334,7 +342,7 @@ impl<'i, 'r> Frame<'i, 'r> {
     #[doc(alias = "C3D_DrawElements")]
     pub fn draw<T: render::Target, I: buffer::Index>(
         &mut self,
-        pass: &RenderPass<'r, '_, T, I>,
+        pass: &RenderPass<'r, '_, '_, T, I>,
     ) -> Result<()> {
         let RenderPass {
             program,
@@ -435,30 +443,32 @@ impl Drop for Frame<'_, '_> {
 }
 
 /// A RenderPass describes all the parameters for making a call to render a vbo.
+/// `'l` has a long life and must be alive until the end of the frame
+/// `'s` has a short life and must only be alive as long as this render pass is
 #[derive(Clone)]
-pub struct RenderPass<'k, 'buf, T: render::Target, I: Index> {
-    pub program: &'k shader::Program,
-    pub target: &'k T,
+pub struct RenderPass<'l, 's, 'buf, T: render::Target, I: Index> {
+    pub program: &'l shader::Program,
+    pub target: &'l T,
     pub vbo_data: buffer::Slice<'buf>,
-    pub attribute_info: &'k attrib::Info,
+    pub attribute_info: &'l attrib::Info,
     /// The [`texenv::TexEnv`] stages used to combine shader outputs and textures.
     /// There must be at least 1 and at most 6 provided, any more than 6 will be ignored.
     pub texenv_stages: Vec<texenv::TexEnv>,
-    pub textures: [Option<&'k texture::Texture>; 4],
+    pub textures: [Option<&'l texture::Texture>; 4],
     pub primitive: buffer::Primitive,
-    pub indices: Option<&'k buffer::Indices<'buf, I>>,
-    pub vertex_uniforms: Vec<(uniform::Index, Uniform)>,
-    pub geometry_uniforms: Vec<(uniform::Index, Uniform)>,
-    pub lightenv: Option<&'k light::LightEnv>,
+    pub indices: Option<&'l buffer::Indices<'buf, I>>,
+    pub vertex_uniforms: Vec<(uniform::Index, Uniform<'s>)>,
+    pub geometry_uniforms: Vec<(uniform::Index, Uniform<'s>)>,
+    pub lightenv: Option<&'l light::LightEnv>,
 }
 
-impl<'k, 'buf, T: render::Target> RenderPass<'k, 'buf, T, u8> {
+impl<'l, 's, 'buf, T: render::Target> RenderPass<'l, 's, 'buf, T, u8> {
     pub fn new(
-        program: &'k shader::Program,
-        target: &'k T,
+        program: &'l shader::Program,
+        target: &'l T,
         vbo_data: buffer::Slice<'buf>,
-        attribute_info: &'k attrib::Info,
-    ) -> RenderPass<'k, 'buf, T, u8> {
+        attribute_info: &'l attrib::Info,
+    ) -> RenderPass<'l, 's, 'buf, T, u8> {
         RenderPass {
             program,
             target,
@@ -475,8 +485,8 @@ impl<'k, 'buf, T: render::Target> RenderPass<'k, 'buf, T, u8> {
     }
 }
 
-impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
-    pub fn no_indices(self) -> RenderPass<'k, 'buf, T, u8> {
+impl<'l, 's, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'l, 's, 'buf, T, I> {
+    pub fn no_indices(self) -> RenderPass<'l, 's, 'buf, T, u8> {
         RenderPass {
             program: self.program,
             target: self.target,
@@ -492,12 +502,15 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
         }
     }
 
-    pub fn with_program(mut self, program: &'k shader::Program) -> RenderPass<'k, 'buf, T, I> {
+    pub fn with_program(mut self, program: &'l shader::Program) -> RenderPass<'l, 's, 'buf, T, I> {
         self.program = program;
         self
     }
 
-    pub fn with_target<T2: render::Target>(self, target: &'k T2) -> RenderPass<'k, 'buf, T2, I> {
+    pub fn with_target<T2: render::Target>(
+        self,
+        target: &'l T2,
+    ) -> RenderPass<'l, 's, 'buf, T2, I> {
         RenderPass {
             program: self.program,
             target,
@@ -515,8 +528,8 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
 
     pub fn with_indices<I2: buffer::Index>(
         self,
-        indices: &'k buffer::Indices<'buf, I2>,
-    ) -> RenderPass<'k, 'buf, T, I2> {
+        indices: &'l buffer::Indices<'buf, I2>,
+    ) -> RenderPass<'l, 's, 'buf, T, I2> {
         RenderPass {
             program: self.program,
             target: self.target,
@@ -535,8 +548,8 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
     pub fn with_vbo(
         mut self,
         vbo_data: buffer::Slice<'buf>,
-        attribute_info: &'k attrib::Info,
-    ) -> RenderPass<'k, 'buf, T, I> {
+        attribute_info: &'l attrib::Info,
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.vbo_data = vbo_data;
         self.attribute_info = attribute_info;
         self
@@ -545,7 +558,7 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
     pub fn with_texenv_stages<'a>(
         mut self,
         texenvs: impl IntoIterator<Item = &'a texenv::TexEnv>,
-    ) -> RenderPass<'k, 'buf, T, I> {
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.texenv_stages = texenvs.into_iter().cloned().collect();
         self
     }
@@ -555,13 +568,16 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
     pub fn with_texture(
         mut self,
         texture_unit: texture::TexUnit,
-        texture: &'k texture::Texture,
-    ) -> RenderPass<'k, 'buf, T, I> {
+        texture: &'l texture::Texture,
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.textures[texture_unit as usize] = Some(texture);
         self
     }
 
-    pub fn with_primitive(mut self, primitive: buffer::Primitive) -> RenderPass<'k, 'buf, T, I> {
+    pub fn with_primitive(
+        mut self,
+        primitive: buffer::Primitive,
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.primitive = primitive;
         self
     }
@@ -570,8 +586,8 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
     /// This will clear any previously set uniforms and only use the new ones provided.
     pub fn with_vertex_uniforms(
         mut self,
-        uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
-    ) -> RenderPass<'k, 'buf, T, I> {
+        uniforms: impl IntoIterator<Item = (uniform::Index, Uniform<'s>)>,
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.vertex_uniforms = uniforms.into_iter().collect();
         self
     }
@@ -580,18 +596,21 @@ impl<'k, 'buf, 'arr, T: render::Target, I: Index> RenderPass<'k, 'buf, T, I> {
     /// This will clear any previously set uniforms and only use the new ones provided.
     pub fn with_geometry_uniforms(
         mut self,
-        uniforms: impl IntoIterator<Item = (uniform::Index, Uniform)>,
-    ) -> RenderPass<'k, 'buf, T, I> {
+        uniforms: impl IntoIterator<Item = (uniform::Index, Uniform<'s>)>,
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.geometry_uniforms = uniforms.into_iter().collect();
         self
     }
 
-    pub fn with_lightenv(mut self, lightenv: &'k light::LightEnv) -> RenderPass<'k, 'buf, T, I> {
+    pub fn with_lightenv(
+        mut self,
+        lightenv: &'l light::LightEnv,
+    ) -> RenderPass<'l, 's, 'buf, T, I> {
         self.lightenv = Some(lightenv);
         self
     }
 
-    pub fn no_lightenv(mut self) -> RenderPass<'k, 'buf, T, I> {
+    pub fn no_lightenv(mut self) -> RenderPass<'l, 's, 'buf, T, I> {
         self.lightenv = None;
         self
     }
