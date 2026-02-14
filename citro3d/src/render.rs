@@ -468,7 +468,11 @@ impl<'instance> Frame<'instance> {
     /// let mtx = Matrix4::identity();
     /// instance.bind_vertex_uniform(idx, &mtx);
     /// ```
-    pub fn bind_vertex_uniform(&mut self, index: uniform::Index, uniform: impl Into<Uniform>) {
+    pub fn bind_vertex_uniform<'a>(
+        &mut self,
+        index: uniform::Index,
+        uniform: impl Into<Uniform<'a>>,
+    ) {
         if !self.is_program_bound {
             panic!("tried to bind vertex uniform when no shader program is bound");
         }
@@ -495,7 +499,11 @@ impl<'instance> Frame<'instance> {
     /// let mtx = Matrix4::identity();
     /// instance.bind_geometry_uniform(idx, &mtx);
     /// ```
-    pub fn bind_geometry_uniform(&mut self, index: uniform::Index, uniform: impl Into<Uniform>) {
+    pub fn bind_geometry_uniform<'a>(
+        &mut self,
+        index: uniform::Index,
+        uniform: impl Into<Uniform<'a>>,
+    ) {
         if !self.is_program_bound {
             panic!("tried to bind geometry uniform when no shader program is bound");
         }
